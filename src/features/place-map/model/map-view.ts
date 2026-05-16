@@ -1,4 +1,4 @@
-import type { Place } from "./domain";
+import type { Place } from "@/entities/community";
 
 export type MapView = {
   latitude: number;

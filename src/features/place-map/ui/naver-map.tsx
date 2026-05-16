@@ -2,8 +2,8 @@
 
 import { MapPin, Navigation } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Place } from "@/lib/domain";
-import { getInitialMapView } from "@/lib/map-view";
+import type { Place } from "@/entities/community";
+import { getInitialMapView } from "../model/map-view";
 
 type NaverLatLng = object;
 type NaverMap = {
