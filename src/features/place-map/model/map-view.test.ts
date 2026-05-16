@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_MAP_VIEW, getInitialMapView } from "./map-view";
-import type { Place } from "./domain";
+import type { Place } from "@/entities/community";
 
 const places: Place[] = [
   {

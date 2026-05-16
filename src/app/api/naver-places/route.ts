@@ -10,7 +10,7 @@ import {
   type NaverLocalSearchCredentials,
   type NaverLocalSearchItem,
   type NaverPlaceCandidate,
-} from "@/lib/naver-local-search";
+} from "@/features/naver-place-import";
 
 export const dynamic = "force-dynamic";
 
