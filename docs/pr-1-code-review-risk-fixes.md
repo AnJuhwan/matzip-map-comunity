@@ -10,6 +10,11 @@ PR #1 코드리뷰에서 기능 구현 자체는 MVP 범위에 맞지만, 운영
 
 이번 브랜치 `fix/code-review-risk-items`는 리뷰 코멘트의 P1/P2 항목과 코드로 닫기 쉬운 P3 항목을 좁게 수정한다.
 
+팀에서 같은 흐름을 재사용할 수 있도록 repo-scoped Codex skill도 추가했다.
+
+- Skill path: `.codex/skills/pr-review-to-notion/SKILL.md`
+- Purpose: PR review comment를 코드 수정, PR 문서화, Notion 프로젝트/태스크, CEO/design/engineering review로 연결한다.
+
 ## 수정 요약
 
 1. 운영자 숨김/삭제 상태 복구 우회 차단
