@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const isDatabaseMode = process.env.E2E_BACKEND === "supabase";
-const e2ePort = process.env.E2E_PORT ?? "3107";
+const e2ePort = process.env.E2E_PORT ?? (isDatabaseMode ? "3108" : "3107");
 const baseURL = `http://localhost:${e2ePort}`;
 const devServerCommand = isDatabaseMode
   ? `npm run dev -- -p ${e2ePort}`
