@@ -22,6 +22,7 @@ NAVER_MAP_CLIENT_ID=
 NAVER_MAP_CLIENT_SECRET=
 NAVER_SEARCH_CLIENT_ID=
 NAVER_SEARCH_CLIENT_SECRET=
+NAVER_IMPORT_ADMIN_TOKEN=
 ```
 
 - `NEXT_PUBLIC_SUPABASE_URL`: Supabase project URL
@@ -31,6 +32,7 @@ NAVER_SEARCH_CLIENT_SECRET=
 - `NAVER_MAP_CLIENT_SECRET`: 서버 지오코딩 요청용 secret
 - `NAVER_SEARCH_CLIENT_ID`: 네이버 지역 검색 후보 조회용 client id
 - `NAVER_SEARCH_CLIENT_SECRET`: 네이버 지역 검색 후보 조회용 secret
+- `NAVER_IMPORT_ADMIN_TOKEN`: 운영자 후보 조회 API 호출 시 `x-matzip-admin-token` 헤더로 보낼 서버 전용 토큰
 
 ## Supabase 설정
 
@@ -43,17 +45,19 @@ NAVER_SEARCH_CLIENT_SECRET=
 ## RLS 의도
 
 - `places`, `reviews`: `status = 'public'`인 행만 공개 읽기
-- `places`, `reviews`: `owner_id = auth.uid()`인 사용자만 수정
+- `places`, `reviews`: 공개 상태인 본인 콘텐츠만 수정 또는 삭제 상태로 전환
+- `reviews`: 연결된 `places` 행이 공개 상태일 때만 공개 읽기 및 신규 작성
 - `anonymous_profiles`: 본인 프로필만 조회 및 수정
 - `reports`: 인증된 익명 사용자만 신고 생성
-- `storage.objects`: `place-photos/{auth.uid()}/...` 경로만 업로드 허용
+- `storage.objects`: `place-photos/{auth.uid()}/...` 경로에 JPG, PNG, WebP, GIF만 업로드 허용
+- `place-photos` bucket: public 읽기, 5MB 파일 크기 제한, 이미지 MIME type 제한
 
 ## 네이버지도 설정
 
 - 지도 렌더링에는 `NEXT_PUBLIC_NAVER_MAP_CLIENT_ID`가 필요하다.
 - 주소 검색에는 `NAVER_MAP_CLIENT_ID`, `NAVER_MAP_CLIENT_SECRET`가 필요하다.
 - 네이버 플레이스 데이터를 복제하지 않고, 사용자가 입력한 가게명과 주소를 저장한다.
-- `/api/naver-places`는 운영자 검토용 후보 조회 API다. 후보를 자동 공개 데이터로 저장하지 않는다.
+- `/api/naver-places`는 운영자 검토용 후보 조회 API다. `NAVER_IMPORT_ADMIN_TOKEN`과 일치하는 `x-matzip-admin-token` 헤더가 있어야 호출할 수 있고, 후보를 자동 공개 데이터로 저장하지 않는다.
 
 ### 주소 검색 401 확인
 

@@ -1,0 +1,16 @@
+interface:
+  display_name: "PR Review To Notion"
+  short_description: "Turn PR review feedback into fixes and Notion tasks"
+  default_prompt: "Use $pr-review-to-notion to address this PR's review comments, document the result, and create linked Notion tasks."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "github"
+      description: "Read PR comments and post PR documentation."
+    - type: "mcp"
+      value: "notion"
+      description: "Create project pages and task records linked to PRs."
+
+policy:
+  allow_implicit_invocation: true
