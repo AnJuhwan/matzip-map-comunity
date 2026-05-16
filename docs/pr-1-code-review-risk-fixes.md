@@ -14,6 +14,9 @@ PR #1 코드리뷰에서 기능 구현 자체는 MVP 범위에 맞지만, 운영
 
 - Skill path: `.codex/skills/pr-review-to-notion/SKILL.md`
 - Purpose: PR review comment를 코드 수정, PR 문서화, Notion 프로젝트/태스크, CEO/design/engineering review로 연결한다.
+- Product review skill: `.codex/skills/matzip-review/SKILL.md`
+- Product review trigger: `/matzip-review`
+- Product review purpose: 필요한 reviewer persona만 자동 선택해 토의하고, 결정과 태스크를 Notion에 정리한다.
 
 ## 수정 요약
 
