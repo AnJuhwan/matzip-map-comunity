@@ -3,7 +3,12 @@
 import { MapPin, Navigation } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Place } from "@/entities/community";
-import { getInitialMapView } from "../model/map-view";
+import {
+  clearNaverMapMarkers,
+  getFallbackMapMarkers,
+  getInitialMapView,
+  installNaverMapAuthFailureHandler,
+} from "../model/map-view";
 
 type NaverLatLng = object;
 type NaverMap = {
@@ -31,6 +36,7 @@ declare global {
       maps: NaverMaps;
     };
     __matzipNaverMapReady?: () => void;
+    navermap_authFailure?: () => void;
   }
 }
 
@@ -61,9 +67,10 @@ export function NaverMap({ places, selectedPlaceId, onSelectPlace }: NaverMapPro
     }
 
     let cancelled = false;
+    let authFailed = false;
 
     function markReady() {
-      if (cancelled) {
+      if (cancelled || authFailed) {
         return;
       }
 
@@ -84,10 +91,22 @@ export function NaverMap({ places, selectedPlaceId, onSelectPlace }: NaverMapPro
       }
     }
 
+    function markAuthFailed() {
+      authFailed = true;
+
+      if (!cancelled) {
+        setMapLoadState("failed");
+        setFallbackMessage("네이버지도 인증에 실패했습니다. 도메인 허용 설정을 확인해 주세요.");
+      }
+    }
+
+    const cleanupAuthFailure = installNaverMapAuthFailureHandler(window, markAuthFailed);
+
     if (window.naver?.maps) {
       markReady();
       return () => {
         cancelled = true;
+        cleanupAuthFailure();
       };
     }
 
@@ -104,6 +123,7 @@ export function NaverMap({ places, selectedPlaceId, onSelectPlace }: NaverMapPro
 
       return () => {
         cancelled = true;
+        cleanupAuthFailure();
         existingScript.removeEventListener("load", markReady);
         existingScript.removeEventListener("error", markFailed);
       };
@@ -133,6 +153,7 @@ export function NaverMap({ places, selectedPlaceId, onSelectPlace }: NaverMapPro
 
     return () => {
       cancelled = true;
+      cleanupAuthFailure();
     };
   }, [clientId]);
 
@@ -168,7 +189,7 @@ export function NaverMap({ places, selectedPlaceId, onSelectPlace }: NaverMapPro
       return;
     }
 
-    markersRef.current.forEach((marker) => marker.setMap(null));
+    clearNaverMapMarkers(markersRef.current);
     markersRef.current = places.map((place) => {
       const marker = new naverMaps.Marker({
         position: new naverMaps.LatLng(place.latitude, place.longitude),
@@ -180,7 +201,7 @@ export function NaverMap({ places, selectedPlaceId, onSelectPlace }: NaverMapPro
     });
 
     return () => {
-      markersRef.current.forEach((marker) => marker.setMap(null));
+      clearNaverMapMarkers(markersRef.current);
       markersRef.current = [];
     };
   }, [mapLoadState, onSelectPlace, places]);
@@ -222,26 +243,14 @@ function FallbackMap({
   onSelectPlace,
   message,
 }: NaverMapProps & { message: string }) {
-  const bounds = useMemo(() => {
-    if (!places.length) {
-      return {
-        minLat: 37.4565,
-        maxLat: 37.6765,
-        minLng: 126.868,
-        maxLng: 127.088,
-      };
-    }
-
-    const latitudes = places.map((place) => place.latitude);
-    const longitudes = places.map((place) => place.longitude);
-
-    return {
-      minLat: Math.min(...latitudes),
-      maxLat: Math.max(...latitudes),
-      minLng: Math.min(...longitudes),
-      maxLng: Math.max(...longitudes),
-    };
-  }, [places]);
+  const markerLayout = useMemo(
+    () => getFallbackMapMarkers(places, selectedPlaceId),
+    [places, selectedPlaceId]
+  );
+  const markerLayoutById = useMemo(
+    () => new Map(markerLayout.map((marker) => [marker.id, marker])),
+    [markerLayout]
+  );
 
   return (
     <section className="relative min-h-[420px] overflow-hidden bg-[#dfe9e1] lg:min-h-screen">
@@ -257,42 +266,37 @@ function FallbackMap({
         </div>
       ) : null}
       {places.map((place) => {
-        const left = toPercent(place.longitude, bounds.minLng, bounds.maxLng);
-        const top = 100 - toPercent(place.latitude, bounds.minLat, bounds.maxLat);
-        const isSelected = place.id === selectedPlaceId;
+        const marker = markerLayoutById.get(place.id);
+        if (!marker) {
+          return null;
+        }
 
         return (
           <button
             key={place.id}
             type="button"
             onClick={() => onSelectPlace(place.id)}
-            className="absolute flex -translate-x-1/2 -translate-y-full flex-col items-center gap-1"
-            style={{ left: `${left}%`, top: `${top}%` }}
+            className="absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1"
+            style={{ left: `${marker.left}%`, top: `${marker.top}%` }}
             aria-label={`${place.name} 선택`}
           >
             <span
               className={`grid h-10 w-10 place-items-center rounded-full border-2 shadow-lg transition ${
-                isSelected
+                marker.isSelected
                   ? "border-[#17352b] bg-[#e85d4f] text-white"
                   : "border-white bg-[#0f7a5f] text-white"
               }`}
             >
               <MapPin size={20} fill="currentColor" />
             </span>
-            <span className="max-w-32 rounded-md bg-white/95 px-2 py-1 text-xs font-semibold text-[#17352b] shadow-sm">
-              {place.name}
-            </span>
+            {marker.showLabel ? (
+              <span className="max-w-36 rounded-md bg-white/95 px-2 py-1 text-xs font-semibold text-[#17352b] shadow-sm">
+                {place.name}
+              </span>
+            ) : null}
           </button>
         );
       })}
     </section>
   );
-}
-
-function toPercent(value: number, min: number, max: number) {
-  if (min === max) {
-    return 50;
-  }
-
-  return 8 + ((value - min) / (max - min)) * 84;
 }
