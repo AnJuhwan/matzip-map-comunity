@@ -23,6 +23,10 @@ baseline non-browser gates.
 When changing code, follow the lightweight conventions in
 `docs/code-conventions.md`.
 
+When creating or updating pull requests, follow `docs/pr-conventions.md`.
+PR titles, descriptions, review summaries, and PR comment replies must be
+written in Korean.
+
 ## GStack Review Routing
 
 GStack is installed globally for Codex in `~/.codex/skills/`. When the user's
