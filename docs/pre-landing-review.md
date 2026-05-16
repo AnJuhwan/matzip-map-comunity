@@ -18,7 +18,7 @@
 
 ```bash
 npm test
-# 4 files passed, 15 tests passed
+# 4 files passed, 17 tests passed
 
 npm run lint
 # exit 0
@@ -38,18 +38,17 @@ npm run build
 새 dev server를 `http://localhost:3010`에서 실행해 확인했다.
 
 ```bash
-curl -I http://localhost:3010
-# HTTP/1.1 200 OK
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3010
+# 200
 ```
 
 ```bash
-curl -i 'http://localhost:3010/api/naver-places?limit=1'
-# HTTP/1.1 501 Not Implemented
-# NAVER_SEARCH_CLIENT_ID, NAVER_SEARCH_CLIENT_SECRET 미설정 안내
+curl -s 'http://localhost:3010/api/naver-places?limit=1'
+# HTTP 200, count 1, 명동교자 본점 좌표 반환 확인
 ```
 
 ```bash
-curl -i 'http://localhost:3010/api/geocode?query=서울시청'
+curl -i 'http://localhost:3010/api/geocode?query=%EC%84%9C%EC%9A%B8%EC%8B%9C%EC%B2%AD'
 # HTTP/1.1 401 Unauthorized
 # 현재 로컬 Naver Cloud 지오코딩 credential 또는 권한 설정 문제
 ```
