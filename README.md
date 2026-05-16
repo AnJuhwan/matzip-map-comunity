@@ -30,6 +30,37 @@ npm run dev
 
 브라우저에서 [http://localhost:3000](http://localhost:3000)을 엽니다.
 
+## 폴더 구조
+
+이 프로젝트는 Feature-Sliced Design(FSD)을 기준으로 폴더를 나눕니다. Next.js App Router의 예약 폴더인 `src/app`은 라우팅과 route handler만 담당하고, 실제 화면과 비즈니스 로직은 FSD 레이어에 둡니다.
+
+```text
+src/
+  app/                         # Next.js 라우트, 레이아웃, API route
+  widgets/                     # 페이지를 구성하는 큰 화면 블록
+    matzip-community/
+      ui/                      # 화면 렌더링
+      model/                   # 화면 상태와 이벤트 로직
+  features/                    # 사용자가 수행하는 기능 단위
+    place-map/
+      ui/
+      model/
+    place-editor/
+      ui/
+      model/
+    review-editor/
+      ui/
+      model/
+    naver-place-import/
+      model/
+  entities/                    # 도메인 모델과 저장소
+    community/
+      model/
+  shared/                      # 특정 도메인에 묶이지 않는 공용 코드
+```
+
+레이어 의존성은 `app -> widgets -> features -> entities -> shared` 방향으로만 흐르게 유지합니다. 각 slice는 `index.ts`를 public API로 사용하고, UI와 로직은 `ui`와 `model` 폴더로 분리합니다.
+
 ## Compound Engineering 루프
 
 Codex에서 `compound-engineering` 플러그인을 활성화한 뒤 큰 작업은 다음 루프로 진행합니다.
@@ -86,6 +117,7 @@ Supabase SQL Editor에서 `supabase/schema.sql`을 실행한 뒤 Anonymous Sign-
 - [GStack 관점 리뷰](docs/mvp-gstack-review.md)
 - [운영 및 배포 체크리스트](docs/operations.md)
 - [Pre-Landing Review](docs/pre-landing-review.md)
+- [코드 컨벤션](docs/code-conventions.md)
 - [Git 컨벤션](docs/git-conventions.md)
 
 ## 확인

@@ -20,6 +20,9 @@ npm run test:e2e
 Use `npm test`, `npm run lint`, `npm run typecheck`, and `npm run build` as the
 baseline non-browser gates.
 
+When changing code, follow the lightweight conventions in
+`docs/code-conventions.md`.
+
 ## GStack Review Routing
 
 GStack is installed globally for Codex in `~/.codex/skills/`. When the user's

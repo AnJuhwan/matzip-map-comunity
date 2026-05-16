@@ -1,30 +1,8 @@
 "use client";
 
 import { Camera, Check, LocateFixed, Search, X } from "lucide-react";
-import { useMemo, useState } from "react";
-import {
-  PLACE_CATEGORIES,
-  PLACE_TAGS,
-  type CategoryId,
-  type Place,
-  type PlaceDraft,
-  findDuplicatePlaces,
-} from "@/lib/domain";
-
-type GeocodeResult = {
-  address: string;
-  latitude: number;
-  longitude: number;
-  source: "naver" | "fallback";
-};
-
-type PlaceFormProps = {
-  ownerAnonymousId: string;
-  places: Place[];
-  editingPlace?: Place | null;
-  onCancel: () => void;
-  onSave: (input: { id?: string; draft: PlaceDraft; imageFile?: File | null }) => Promise<void>;
-};
+import { PLACE_CATEGORIES, PLACE_TAGS } from "@/entities/community";
+import { usePlaceForm, type PlaceFormProps } from "../model/use-place-form";
 
 export function PlaceForm({
   ownerAnonymousId,
@@ -33,100 +11,25 @@ export function PlaceForm({
   onCancel,
   onSave,
 }: PlaceFormProps) {
-  const [name, setName] = useState(editingPlace?.name ?? "");
-  const [address, setAddress] = useState(editingPlace?.address ?? "");
-  const [categoryId, setCategoryId] = useState<CategoryId>(editingPlace?.categoryId ?? "budget");
-  const [tagIds, setTagIds] = useState<string[]>(editingPlace?.tagIds ?? []);
-  const [geocode, setGeocode] = useState<GeocodeResult | null>(
-    editingPlace
-      ? {
-          address: editingPlace.address,
-          latitude: editingPlace.latitude,
-          longitude: editingPlace.longitude,
-          source: "naver",
-        }
-      : null
-  );
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [message, setMessage] = useState("");
-
-  const duplicates = useMemo(() => {
-    if (!geocode || !name.trim()) {
-      return [];
-    }
-
-    return findDuplicatePlaces(
-      {
-        name,
-        address: geocode.address,
-        latitude: geocode.latitude,
-        longitude: geocode.longitude,
-      },
-      places.filter((place) => place.id !== editingPlace?.id)
-    );
-  }, [editingPlace?.id, geocode, name, places]);
-
-  async function handleSearchAddress() {
-    setMessage("");
-    setIsSearching(true);
-
-    try {
-      const response = await fetch(`/api/geocode?query=${encodeURIComponent(address)}`);
-      const body = await response.json();
-
-      if (!response.ok) {
-        throw new Error(body.error ?? "주소를 찾지 못했습니다.");
-      }
-
-      setAddress(body.address);
-      setGeocode(body as GeocodeResult);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "주소 검색 실패");
-    } finally {
-      setIsSearching(false);
-    }
-  }
-
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setMessage("");
-
-    if (!geocode) {
-      setMessage("주소 검색으로 지도 핀을 먼저 확인해주세요.");
-      return;
-    }
-
-    setIsSaving(true);
-
-    try {
-      await onSave({
-        id: editingPlace?.id,
-        draft: {
-          name,
-          address: geocode.address,
-          latitude: geocode.latitude,
-          longitude: geocode.longitude,
-          categoryId,
-          tagIds,
-          ownerAnonymousId,
-          heroImageUrl: editingPlace?.heroImageUrl,
-        },
-        imageFile,
-      });
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "저장하지 못했습니다.");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  function toggleTag(tagId: string) {
-    setTagIds((current) =>
-      current.includes(tagId) ? current.filter((item) => item !== tagId) : [...current, tagId]
-    );
-  }
+  const form = usePlaceForm({ ownerAnonymousId, places, editingPlace, onSave });
+  const {
+    name,
+    setName,
+    address,
+    handleAddressChange,
+    categoryId,
+    setCategoryId,
+    tagIds,
+    geocode,
+    setImageFile,
+    isSearching,
+    isSaving,
+    message,
+    duplicates,
+    handleSearchAddress,
+    handleSubmit,
+    toggleTag,
+  } = form;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
@@ -165,10 +68,7 @@ export function PlaceForm({
         <div className="flex gap-2">
           <input
             value={address}
-            onChange={(event) => {
-              setAddress(event.target.value);
-              setGeocode(null);
-            }}
+            onChange={(event) => handleAddressChange(event.target.value)}
             className="h-12 min-w-0 flex-1 rounded-md border border-[#d9e4dd] bg-white px-3 text-[#17352b] outline-none transition focus:border-[#0f7a5f]"
             placeholder="도로명 주소"
             required

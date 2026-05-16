@@ -1,4 +1,4 @@
-import type { CategoryId } from "./domain";
+import type { CategoryId } from "@/entities/community";
 
 export type NaverLocalSearchCredentials = {
   clientId: string;
