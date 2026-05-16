@@ -1,5 +1,25 @@
 # Codex Project Instructions
 
+## Compound Engineering Main Loop
+
+For substantial product or engineering changes, use the Compound Engineering
+loop by default once the plugin is active:
+
+1. Plan with `/ce-plan` or an existing plan document.
+2. Work with `/ce-work`.
+3. Review with `/ce-code-review`.
+4. Compound learnings with `/ce-compound mode:headless`.
+
+Run browser-level verification before the review/compound closeout when the
+change affects user-visible behavior:
+
+```bash
+npm run test:e2e
+```
+
+Use `npm test`, `npm run lint`, `npm run typecheck`, and `npm run build` as the
+baseline non-browser gates.
+
 ## GStack Review Routing
 
 GStack is installed globally for Codex in `~/.codex/skills/`. When the user's

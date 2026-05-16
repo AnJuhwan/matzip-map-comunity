@@ -23,6 +23,35 @@ npm run dev
 
 브라우저에서 [http://localhost:3000](http://localhost:3000)을 엽니다.
 
+## Compound Engineering 루프
+
+Codex에서 `compound-engineering` 플러그인을 활성화한 뒤 큰 작업은 다음 루프로 진행합니다.
+
+```text
+/ce-plan
+/ce-work
+/ce-code-review
+/ce-compound mode:headless
+```
+
+브라우저에서 검증해야 하는 UI 변경은 Playwright e2e 테스트까지 통과시킵니다.
+
+처음 실행하는 환경에서는 Chromium 브라우저를 한 번 설치합니다.
+
+```bash
+npm run test:e2e:install
+```
+
+기본 e2e는 재현 가능한 로컬 fallback 데이터로 실행합니다. 실제 Supabase DB에서 공개 맛집을 가져오는 smoke test는 `.env`의 DB 설정을 사용해 별도로 실행합니다.
+
+```bash
+npm run test:e2e
+npm run test:e2e:db
+npm run test:e2e:db:ui
+```
+
+이미 3107 포트를 쓰는 개발 서버가 있으면 `E2E_PORT=3108 npm run test:e2e`처럼 포트를 바꿔 실행합니다.
+
 ## 환경변수
 
 ```bash
@@ -54,6 +83,8 @@ Supabase SQL Editor에서 `supabase/schema.sql`을 실행한 뒤 Anonymous Sign-
 
 ```bash
 npm test
+npm run test:e2e
+npm run test:e2e:db
 npm run lint
 npm run typecheck
 npm run build
