@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import {
   buildNaverLocalSearchQueries,
   dedupeNaverPlaceCandidates,
+  getCoordinatesFromNaverLocalItem,
   getNaverLocalSearchCredentials,
+  isNaverRateLimitMessage,
   mapNaverLocalItemToPlaceCandidate,
   sanitizeNaverText,
   type NaverLocalSearchCredentials,
@@ -30,6 +32,7 @@ type NaverGeocodeResponse = {
 
 const MAX_IMPORT_LIMIT = 100;
 const NAVER_LOCAL_DISPLAY_LIMIT = 5;
+const NAVER_LOCAL_REQUEST_DELAY_MS = 180;
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -49,21 +52,12 @@ export async function GET(request: Request) {
     );
   }
 
-  if (!geocodeCredentials) {
-    return NextResponse.json(
-      {
-        error: "좌표 변환을 위해 NAVER_MAP_CLIENT_ID와 NAVER_MAP_CLIENT_SECRET이 필요합니다.",
-      },
-      { status: 501 }
-    );
-  }
-
   const queries = singleQuery ? [singleQuery] : buildNaverLocalSearchQueries();
   const candidates: NaverPlaceCandidate[] = [];
 
   try {
     for (const query of queries) {
-      if (candidates.length >= limit) {
+      if (dedupeNaverPlaceCandidates(candidates).length >= limit) {
         break;
       }
 
@@ -76,7 +70,9 @@ export async function GET(request: Request) {
             return null;
           }
 
-          const coordinates = await geocodeAddress(address, geocodeCredentials);
+          const coordinates =
+            getCoordinatesFromNaverLocalItem(item) ??
+            (geocodeCredentials ? await geocodeAddress(address, geocodeCredentials) : null);
 
           if (!coordinates) {
             return null;
@@ -89,11 +85,31 @@ export async function GET(request: Request) {
       candidates.push(
         ...mapped.filter((candidate): candidate is NaverPlaceCandidate => Boolean(candidate))
       );
+
+      if (dedupeNaverPlaceCandidates(candidates).length >= limit) {
+        break;
+      }
+
+      await delay(NAVER_LOCAL_REQUEST_DELAY_MS);
     }
   } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : "네이버 지역 검색 요청에 실패했습니다.";
+
+    if (isNaverRateLimitMessage(errorMessage) && candidates.length) {
+      const places = dedupeNaverPlaceCandidates(candidates).slice(0, limit);
+
+      return NextResponse.json({
+        source: "naver-local-search",
+        count: places.length,
+        warning: "네이버 속도 제한으로 일부 결과만 가져왔습니다.",
+        places,
+      });
+    }
+
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "네이버 지역 검색 요청에 실패했습니다.",
+        error: errorMessage,
       },
       { status: 502 }
     );
@@ -176,4 +192,10 @@ function getNaverGeocodeCredentials() {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(Math.trunc(value), min), max);
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

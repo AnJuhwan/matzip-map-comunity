@@ -10,6 +10,8 @@ export type NaverLocalSearchItem = {
   category: string;
   address: string;
   roadAddress: string;
+  mapx?: string;
+  mapy?: string;
 };
 
 export type NaverPlaceCandidate = {
@@ -133,6 +135,24 @@ export function mapNaverLocalItemToPlaceCandidate(
     sourceCategory,
     sourceQuery,
   };
+}
+
+export function getCoordinatesFromNaverLocalItem(item: NaverLocalSearchItem) {
+  const longitude = Number(item.mapx) / 10_000_000;
+  const latitude = Number(item.mapy) / 10_000_000;
+
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  return {
+    latitude,
+    longitude,
+  };
+}
+
+export function isNaverRateLimitMessage(message: string) {
+  return /rate limit|속도 제한/i.test(message);
 }
 
 export function dedupeNaverPlaceCandidates(candidates: NaverPlaceCandidate[]) {

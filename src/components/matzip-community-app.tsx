@@ -153,10 +153,16 @@ export function MatzipCommunityApp() {
       const body = (await response.json()) as {
         places?: NaverPlaceCandidate[];
         error?: string;
+        warning?: string;
       };
 
       if (!response.ok) {
         throw new Error(body.error ?? "네이버 지역 검색 데이터를 가져오지 못했습니다.");
+      }
+
+      if (!body.places?.length) {
+        setMessage("네이버 검색 결과에서 저장할 새 맛집이 없었습니다.");
+        return;
       }
 
       const importedPlaces: Place[] = [];
@@ -188,9 +194,9 @@ export function MatzipCommunityApp() {
 
       await refreshData();
       setMessage(
-        `네이버 지역 검색에서 ${importedPlaces.length}곳을 가져왔습니다${
-          duplicateCount ? ` (${duplicateCount}곳 중복 제외)` : ""
-        }.`
+        `${body.warning ? `${body.warning} ` : ""}네이버 지역 검색에서 ${
+          importedPlaces.length
+        }곳을 가져왔습니다${duplicateCount ? ` (${duplicateCount}곳 중복 제외)` : ""}.`
       );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "네이버 데이터 가져오기 실패");
@@ -362,9 +368,10 @@ export function MatzipCommunityApp() {
                   onClick={handleImportNaverPlaces}
                   disabled={isImportingPlaces}
                   className="flex h-11 flex-1 items-center justify-center gap-2 rounded-md border border-[#d9e4dd] bg-white px-3 text-sm font-black text-[#17352b] transition hover:border-[#0f7a5f] disabled:cursor-not-allowed disabled:text-[#8a9a92] sm:flex-none"
+                  aria-label="네이버 맛집 가져오기"
                 >
                   <Download size={17} />
-                  {isImportingPlaces ? "가져오는 중" : "가져오기"}
+                  {isImportingPlaces ? "가져오는 중" : "네이버"}
                 </button>
                 <button
                   type="button"
