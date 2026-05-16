@@ -39,6 +39,11 @@ export async function GET(request: Request) {
   const requestedLimit = Number(searchParams.get("limit") ?? "60");
   const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : 60, 1, MAX_IMPORT_LIMIT);
   const singleQuery = searchParams.get("query")?.trim();
+
+  if (!isNaverPlaceImportAuthorized(request)) {
+    return NextResponse.json({ error: "관리자 권한이 필요합니다." }, { status: 403 });
+  }
+
   const searchCredentials = getNaverLocalSearchCredentials(process.env);
   const geocodeCredentials = getNaverGeocodeCredentials();
 
@@ -188,6 +193,12 @@ function getNaverGeocodeCredentials() {
   }
 
   return { keyId, secret };
+}
+
+function isNaverPlaceImportAuthorized(request: Request) {
+  const adminToken = process.env.NAVER_IMPORT_ADMIN_TOKEN;
+
+  return Boolean(adminToken && request.headers.get("x-matzip-admin-token") === adminToken);
 }
 
 function clamp(value: number, min: number, max: number) {

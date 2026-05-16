@@ -189,7 +189,7 @@ export function ReviewForm({
         </span>
         <input
           type="file"
-          accept="image/*"
+          accept="image/jpeg,image/png,image/webp,image/gif"
           onChange={(event) => setImageFile(event.target.files?.[0] ?? null)}
           className="w-full rounded-md border border-dashed border-[#b8c9c0] bg-white px-3 py-3 text-sm text-[#5f6f68]"
         />

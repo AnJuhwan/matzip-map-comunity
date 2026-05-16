@@ -54,9 +54,22 @@ type DbReviewRow = {
 
 const localProfileKey = "matzip.profile.v1";
 const localDataKey = "matzip.community.v1";
+export const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+
+const allowedPhotoMimeTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const photoMimeExtensions: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+};
 
 let browserSupabase: SupabaseClient | null = null;
 let forceLocalMode = false;
+
+type LocalFallbackOptions = {
+  nodeEnv?: string;
+};
 
 export function isSupabaseConfigured() {
   return Boolean(
@@ -169,7 +182,14 @@ export async function updateNickname(profile: AnonymousProfile, nickname: string
   return { ...profile, nickname: nextNickname };
 }
 
-export function shouldUseLocalFallbackForStartupError(message: string) {
+export function shouldUseLocalFallbackForStartupError(
+  message: string,
+  options: LocalFallbackOptions = {}
+) {
+  if (!isLocalFallbackEnabled(options)) {
+    return false;
+  }
+
   const normalized = message.toLowerCase();
 
   return (
@@ -179,6 +199,12 @@ export function shouldUseLocalFallbackForStartupError(message: string) {
     (normalized.includes("relation") && normalized.includes("does not exist")) ||
     (normalized.includes("schema cache") && normalized.includes("not find"))
   );
+}
+
+export function isLocalFallbackEnabled(options: LocalFallbackOptions = {}) {
+  const nodeEnv = options.nodeEnv ?? process.env.NODE_ENV;
+
+  return nodeEnv !== "production";
 }
 
 export async function loadCommunityData(): Promise<CommunityData> {
@@ -250,7 +276,6 @@ export async function savePlace(input: {
       category_id: normalized.categoryId,
       tag_ids: normalized.tagIds,
       hero_image_url: normalized.heroImageUrl ?? null,
-      status: normalized.status,
     };
     const result = input.id
       ? await supabase
@@ -260,7 +285,11 @@ export async function savePlace(input: {
           .eq("owner_id", input.activeAnonymousId)
           .select("*")
           .single()
-      : await supabase.from("places").insert(payload).select("*").single();
+      : await supabase
+          .from("places")
+          .insert({ ...payload, status: normalized.status })
+          .select("*")
+          .single();
 
     if (result.error) {
       throw new Error(result.error.message);
@@ -270,10 +299,12 @@ export async function savePlace(input: {
   }
 
   const data = readLocalData();
+  const existingPlace = input.id ? data.places.find((place) => place.id === input.id) : null;
   const place: Place = {
     ...normalized,
     id: input.id ?? cryptoId(),
-    createdAt: new Date().toISOString(),
+    status: existingPlace?.status ?? normalized.status,
+    createdAt: existingPlace?.createdAt ?? new Date().toISOString(),
   };
   const places = input.id
     ? data.places.map((item) => (item.id === input.id ? place : item))
@@ -305,7 +336,6 @@ export async function saveReview(input: {
       bad_point: input.review.badPoint.trim(),
       revisit_intent: input.review.revisitIntent,
       image_url: imageUrl ?? null,
-      status: "public",
     };
     const result = input.id
       ? await supabase
@@ -315,7 +345,11 @@ export async function saveReview(input: {
           .eq("owner_id", input.activeAnonymousId)
           .select("*")
           .single()
-      : await supabase.from("reviews").insert(payload).select("*").single();
+      : await supabase
+          .from("reviews")
+          .insert({ ...payload, status: "public" })
+          .select("*")
+          .single();
 
     if (result.error) {
       throw new Error(result.error.message);
@@ -325,6 +359,13 @@ export async function saveReview(input: {
   }
 
   const data = readLocalData();
+  const targetPlace = data.places.find((place) => place.id === input.review.placeId);
+
+  if (!targetPlace || targetPlace.status !== "public") {
+    throw new Error("공개된 맛집에만 리뷰를 작성할 수 있습니다.");
+  }
+
+  const existingReview = input.id ? data.reviews.find((review) => review.id === input.id) : null;
   const review: Review = {
     ...input.review,
     id: input.id ?? cryptoId(),
@@ -333,8 +374,8 @@ export async function saveReview(input: {
     goodPoint: input.review.goodPoint.trim(),
     badPoint: input.review.badPoint.trim(),
     imageUrl,
-    status: "public",
-    createdAt: new Date().toISOString(),
+    status: existingReview?.status ?? "public",
+    createdAt: existingReview?.createdAt ?? new Date().toISOString(),
   };
   const reviews = input.id
     ? data.reviews.map((item) => (item.id === input.id ? review : item))
@@ -412,6 +453,8 @@ export async function reportContent(input: {
 }
 
 function ensureLocalProfile(): AnonymousProfile {
+  ensureLocalFallbackAllowed();
+
   const stored = window.localStorage.getItem(localProfileKey);
 
   if (stored) {
@@ -441,6 +484,8 @@ function saveLocalProfile(profile: AnonymousProfile) {
 }
 
 function readLocalData(): CommunityData {
+  ensureLocalFallbackAllowed();
+
   const stored = window.localStorage.getItem(localDataKey);
 
   if (stored) {
@@ -458,13 +503,15 @@ function writeLocalData(data: CommunityData) {
 }
 
 async function uploadPhoto(file: File, ownerId: string, scope: string) {
+  validatePhotoFile(file);
+
   const supabase = getBrowserSupabaseClient();
 
   if (!supabase) {
     return fileToDataUrl(file);
   }
 
-  const extension = file.name.split(".").pop() ?? "jpg";
+  const extension = photoMimeExtensions[file.type] ?? "jpg";
   const path = `${ownerId}/${scope}-${cryptoId()}.${extension}`;
   const uploadResult = await supabase.storage
     .from("place-photos")
@@ -475,6 +522,26 @@ async function uploadPhoto(file: File, ownerId: string, scope: string) {
   }
 
   return supabase.storage.from("place-photos").getPublicUrl(path).data.publicUrl;
+}
+
+export function validatePhotoFile(file: File) {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("이미지 파일만 업로드할 수 있습니다.");
+  }
+
+  if (!allowedPhotoMimeTypes.has(file.type)) {
+    throw new Error("JPG, PNG, WebP, GIF 사진만 업로드할 수 있습니다.");
+  }
+
+  if (file.size > MAX_PHOTO_BYTES) {
+    throw new Error("사진은 5MB 이하만 업로드할 수 있습니다.");
+  }
+}
+
+function ensureLocalFallbackAllowed() {
+  if (!isLocalFallbackEnabled()) {
+    throw new Error("운영 환경에서는 Supabase 설정 오류로 로컬 저장소를 사용할 수 없습니다.");
+  }
 }
 
 function fileToDataUrl(file: File) {

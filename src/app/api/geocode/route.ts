@@ -31,19 +31,25 @@ export async function GET(request: Request) {
     });
   }
 
-  const response = await fetch(
-    `https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode?query=${encodeURIComponent(
-      query
-    )}`,
-    {
-      headers: {
-        Accept: "application/json",
-        "x-ncp-apigw-api-key-id": keyId,
-        "x-ncp-apigw-api-key": secret,
-      },
-      cache: "no-store",
-    }
-  );
+  let response: Response;
+
+  try {
+    response = await fetch(
+      `https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode?query=${encodeURIComponent(
+        query
+      )}`,
+      {
+        headers: {
+          Accept: "application/json",
+          "x-ncp-apigw-api-key-id": keyId,
+          "x-ncp-apigw-api-key": secret,
+        },
+        cache: "no-store",
+      }
+    );
+  } catch {
+    return NextResponse.json({ error: "네이버 지오코딩 요청에 실패했습니다." }, { status: 502 });
+  }
 
   if (!response.ok) {
     return NextResponse.json(
@@ -52,7 +58,16 @@ export async function GET(request: Request) {
     );
   }
 
-  const body = (await response.json()) as NaverGeocodeResponse;
+  let body: NaverGeocodeResponse;
+
+  try {
+    body = (await response.json()) as NaverGeocodeResponse;
+  } catch {
+    return NextResponse.json(
+      { error: "네이버 지오코딩 응답을 해석하지 못했습니다." },
+      { status: 502 }
+    );
+  }
   const first = body.addresses?.[0];
 
   if (body.status !== "OK" || !first) {
