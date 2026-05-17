@@ -24,7 +24,7 @@ import {
   updateNickname,
   type AnonymousProfile,
 } from "@/entities/community";
-import type { NearbyPlaceCandidate } from "@/features/naver-place-import";
+import { parseFoodSearchIntent, type NearbyPlaceCandidate } from "@/features/naver-place-import";
 import { getCenteredGeoBounds } from "@/features/place-map/model/map-view";
 
 export type PanelMode = "browse" | "new-place" | "edit-place";
@@ -281,10 +281,12 @@ export function useMatzipCommunity(initialSearchQuery = "") {
         searchParams.set("west", String(candidateBounds.west));
         searchParams.set("east", String(candidateBounds.east));
 
+        if (areaQuery) {
+          searchParams.set("areaQuery", areaQuery);
+        }
+
         if (trimmedSearchQuery) {
           searchParams.set("query", trimmedSearchQuery);
-        } else if (areaQuery) {
-          searchParams.set("areaQuery", areaQuery);
         }
 
         const response = await fetch(`/api/nearby-place-candidates?${searchParams.toString()}`, {
@@ -390,8 +392,27 @@ export function useMatzipCommunity(initialSearchQuery = "") {
 
   const moveToSearchQueryLocation = useCallback(
     async (nextQuery: string) => {
+      const searchIntent = parseFoodSearchIntent(nextQuery);
+      const candidateSearchQuery = searchIntent?.candidateQuery ?? nextQuery;
+
+      if (searchIntent?.kind === "food") {
+        const currentBounds = visibleMapBoundsRef.current;
+        const candidateLocation = currentBounds
+          ? getGeoBoundsCenter(currentBounds)
+          : mapFocusLocationRef.current;
+
+        await loadNearbyCandidates(
+          candidateSearchQuery,
+          undefined,
+          candidateLocation,
+          currentBounds,
+          visibleMapAreaQueryRef.current
+        );
+        return;
+      }
+
       try {
-        const geocode = await geocodeQuery(nextQuery);
+        const geocode = await geocodeQuery(searchIntent?.areaFocusQuery ?? nextQuery);
 
         if (geocode.source === "fallback") {
           throw new Error("검색 위치를 찾지 못했습니다.");
@@ -411,9 +432,21 @@ export function useMatzipCommunity(initialSearchQuery = "") {
         setMapFocusLocation(nextLocation);
         setLocationFocusKey((current) => current + 1);
 
-        await loadNearbyCandidates(nextQuery, undefined, nextLocation);
+        await loadNearbyCandidates(
+          candidateSearchQuery,
+          undefined,
+          nextLocation,
+          undefined,
+          searchIntent?.kind === "area-food" ? searchIntent.areaQuery : undefined
+        );
       } catch {
-        await loadNearbyCandidates(nextQuery);
+        await loadNearbyCandidates(
+          candidateSearchQuery,
+          undefined,
+          undefined,
+          undefined,
+          searchIntent?.kind === "area-food" ? searchIntent.areaQuery : undefined
+        );
       }
     },
     [loadNearbyCandidates]
@@ -514,7 +547,7 @@ export function useMatzipCommunity(initialSearchQuery = "") {
       });
 
       void loadNearbyCandidates(
-        appliedQuery,
+        getCandidateSearchQuery(appliedQuery),
         undefined,
         nextMapFocusLocation,
         bounds,
@@ -673,11 +706,15 @@ function matchesSearch(
   item: Pick<PlaceWithDistance, "name" | "address" | "tagIds"> & { sourceQuery?: string },
   normalizedQuery: string
 ) {
+  const haystack =
+    `${item.name} ${item.address} ${item.tagIds.join(" ")} ${item.sourceQuery ?? ""}`.toLowerCase();
+  const compactHaystack = compactSearchText(haystack);
+  const compactQuery = compactSearchText(normalizedQuery);
+
   return (
     !normalizedQuery ||
-    `${item.name} ${item.address} ${item.tagIds.join(" ")} ${item.sourceQuery ?? ""}`
-      .toLowerCase()
-      .includes(normalizedQuery)
+    haystack.includes(normalizedQuery) ||
+    (Boolean(compactQuery) && compactHaystack.includes(compactQuery))
   );
 }
 
@@ -723,6 +760,14 @@ function normalizeSearchInput(value?: string | null) {
   return value?.replace(/\s+/g, " ").trim() ?? "";
 }
 
+function getCandidateSearchQuery(searchQuery: string) {
+  return parseFoodSearchIntent(searchQuery)?.candidateQuery ?? searchQuery;
+}
+
+function compactSearchText(value: string) {
+  return value.replace(/\s+/g, "").toLowerCase();
+}
+
 export function buildNearbyCandidateRequestKey({
   searchQuery,
   areaQuery,
@@ -758,7 +803,7 @@ function canUseCandidateLookupLocation({
     return true;
   }
 
-  return locationStatus === "ready";
+  return locationStatus === "ready" || locationStatus === "fallback";
 }
 
 function canUseVisibleBoundsForLookup(
@@ -768,6 +813,7 @@ function canUseVisibleBoundsForLookup(
 ) {
   return (
     locationStatus === "ready" ||
+    locationStatus === "fallback" ||
     (Boolean(normalizeSearchInput(appliedQuery)) &&
       normalizeSearchInput(appliedQuery) === normalizeSearchInput(trustedSearchFocusQuery))
   );

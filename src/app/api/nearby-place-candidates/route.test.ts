@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GET } from "./route";
+import { GET, POST } from "./route";
 
 describe("GET /api/nearby-place-candidates", () => {
   afterEach(() => {
@@ -23,9 +23,11 @@ describe("GET /api/nearby-place-candidates", () => {
   });
 
   it("returns a controlled setup error when Naver search credentials are missing", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
     const response = await GET(
       new Request(
-        "http://localhost/api/nearby-place-candidates?latitude=37.5446&longitude=127.0558"
+        "http://localhost/api/nearby-place-candidates?latitude=37.5446&longitude=127.0558&south=37.54&north=37.55&west=127.04&east=127.06&query=%EC%84%B1%EC%88%98%20%EB%A7%9B%EC%A7%91"
       )
     );
     const body = await response.json();
@@ -35,6 +37,87 @@ describe("GET /api/nearby-place-candidates", () => {
       error:
         "네이버 지역 검색 API 키가 필요합니다. NAVER_SEARCH_CLIENT_ID와 NAVER_SEARCH_CLIENT_SECRET을 설정해주세요.",
     });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("accepts a Postman JSON body for nearby candidate lookup", async () => {
+    vi.stubEnv("NAVER_SEARCH_CLIENT_ID", "search-id");
+    vi.stubEnv("NAVER_SEARCH_CLIENT_SECRET", "search-secret");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const requestUrl = String(url);
+
+      if (requestUrl.includes("/v1/search/local.json")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                title: "성수 손칼국수",
+                category: "한식>칼국수,만두",
+                address: "서울특별시 성동구 성수동2가 1",
+                roadAddress: "서울특별시 성동구 성수이로 10",
+                mapx: "1270558000",
+                mapy: "375446000",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }
+        );
+      }
+
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/nearby-place-candidates", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          latitude: 37.5446,
+          longitude: 127.0558,
+          bounds: {
+            south: 37.54,
+            north: 37.55,
+            west: 127.04,
+            east: 127.06,
+          },
+          query: "성수 맛집",
+          categories: ["food"],
+          includePhotos: false,
+        }),
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      source: "naver-local-search",
+      count: 1,
+      places: [
+        {
+          name: "성수 손칼국수",
+          sourceQuery: "성수 맛집",
+          source: "naver",
+        },
+      ],
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining("/v1/search/local.json"),
+      expect.objectContaining({
+        headers: {
+          "X-Naver-Client-Id": "search-id",
+          "X-Naver-Client-Secret": "search-secret",
+        },
+        cache: "no-store",
+      })
+    );
   });
 
   it("loads Naver restaurants for the visible bounds without a manual search query", async () => {
@@ -125,7 +208,6 @@ describe("GET /api/nearby-place-candidates", () => {
 
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
-      source: "naver-local-search",
       queryArea: "마곡동",
       count: 1,
       places: [
@@ -242,7 +324,6 @@ describe("GET /api/nearby-place-candidates", () => {
 
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
-      source: "naver-local-search",
       queryArea: "까치산역",
       count: 1,
       places: [
@@ -257,6 +338,64 @@ describe("GET /api/nearby-place-candidates", () => {
     });
     expect(fetchSpy).not.toHaveBeenCalledWith(
       expect.stringContaining("/map-reversegeocode/"),
+      expect.anything()
+    );
+  });
+
+  it("combines a food-only search query with the visible map area", async () => {
+    vi.stubEnv("NAVER_SEARCH_CLIENT_ID", "search-id");
+    vi.stubEnv("NAVER_SEARCH_CLIENT_SECRET", "search-secret");
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      const requestUrl = String(url);
+
+      if (requestUrl.includes("query=%EB%A7%88%EA%B3%A1%EB%8F%99%20%EA%B0%88%EB%B9%84")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                title: "마곡 갈비집",
+                category: "한식>육류,고기요리",
+                address: "서울특별시 강서구 마곡동",
+                roadAddress: "서울특별시 강서구 마곡중앙로 20",
+                mapx: "1268305000",
+                mapy: "375605000",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }
+        );
+      }
+
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const response = await GET(
+      new Request(
+        "http://localhost/api/nearby-place-candidates?latitude=37.56&longitude=126.83&south=37.55&north=37.57&west=126.82&east=126.84&query=%EA%B0%88%EB%B9%84&areaQuery=%EB%A7%88%EA%B3%A1%EB%8F%99&categories=food"
+      )
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      queryArea: "마곡동",
+      count: 1,
+      places: [
+        {
+          name: "마곡 갈비집",
+          sourceQuery: "마곡동 갈비",
+          source: "naver",
+        },
+      ],
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining("query=%EB%A7%88%EA%B3%A1%EB%8F%99%20%EA%B0%88%EB%B9%84"),
       expect.anything()
     );
   });
@@ -309,7 +448,6 @@ describe("GET /api/nearby-place-candidates", () => {
 
     expect(response.status).toBe(200);
     expect(body).toMatchObject({
-      source: "naver-local-search",
       queryArea: "영등포역",
       count: 1,
       places: [

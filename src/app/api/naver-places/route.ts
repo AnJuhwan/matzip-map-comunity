@@ -44,7 +44,20 @@ const NAVER_IMAGE_DISPLAY_LIMIT = 1;
 const NAVER_LOCAL_REQUEST_DELAY_MS = 180;
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
+  return handleNaverPlacesRequest(request, new URL(request.url).searchParams);
+}
+
+export async function POST(request: Request) {
+  const body = await readPostmanJsonBody(request);
+
+  if (!body) {
+    return NextResponse.json({ error: "JSON body가 올바르지 않습니다." }, { status: 400 });
+  }
+
+  return handleNaverPlacesRequest(request, buildNaverPlacesPostSearchParams(body));
+}
+
+async function handleNaverPlacesRequest(request: Request, searchParams: URLSearchParams) {
   const requestedLimit = Number(searchParams.get("limit") ?? "60");
   const limit = clamp(Number.isFinite(requestedLimit) ? requestedLimit : 60, 1, MAX_IMPORT_LIMIT);
   const singleQuery = searchParams.get("query")?.trim();
@@ -75,24 +88,13 @@ export async function GET(request: Request) {
         break;
       }
 
-      const items = await searchNaverPlaces(query, searchCredentials);
+      const candidatesForQuery = await searchNaverPlaces(
+        query,
+        searchCredentials,
+        geocodeCredentials
+      );
       const mapped = await Promise.all(
-        items.map(async (item) => {
-          const address = sanitizeNaverText(item.roadAddress || item.address);
-
-          if (!address) {
-            return null;
-          }
-
-          const coordinates =
-            getCoordinatesFromNaverLocalItem(item) ??
-            (geocodeCredentials ? await geocodeAddress(address, geocodeCredentials) : null);
-
-          if (!coordinates) {
-            return null;
-          }
-
-          const candidate = mapNaverLocalItemToPlaceCandidate(item, query, coordinates);
+        candidatesForQuery.map(async (candidate) => {
           const heroImageUrl = await searchNaverPlaceThumbnail(candidate, searchCredentials);
 
           return heroImageUrl ? { ...candidate, heroImageUrl } : candidate;
@@ -141,7 +143,54 @@ export async function GET(request: Request) {
   });
 }
 
-async function searchNaverPlaces(query: string, credentials: NaverLocalSearchCredentials) {
+async function readPostmanJsonBody(request: Request) {
+  try {
+    const body = (await request.json()) as unknown;
+
+    return isJsonObject(body) ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildNaverPlacesPostSearchParams(body: Record<string, unknown>) {
+  const searchParams = new URLSearchParams();
+
+  setSearchParam(searchParams, "query", body.query);
+  setSearchParam(searchParams, "limit", body.limit);
+
+  return searchParams;
+}
+
+function mapLocalItemToCandidate(item: NaverLocalSearchItem, query: string) {
+  const address = sanitizeNaverText(item.roadAddress || item.address);
+
+  if (!address) {
+    return null;
+  }
+
+  const coordinates = getCoordinatesFromNaverLocalItem(item);
+
+  if (!coordinates) {
+    return null;
+  }
+
+  return mapNaverLocalItemToPlaceCandidate(item, query, coordinates);
+}
+
+async function searchNaverPlaces(
+  query: string,
+  credentials: NaverLocalSearchCredentials,
+  geocodeCredentials: { keyId: string; secret: string } | null
+) {
+  return searchNaverLocalPlaces(query, credentials, geocodeCredentials);
+}
+
+async function searchNaverLocalPlaces(
+  query: string,
+  credentials: NaverLocalSearchCredentials,
+  geocodeCredentials: { keyId: string; secret: string } | null
+) {
   const response = await fetch(
     `https://openapi.naver.com/v1/search/local.json?query=${encodeURIComponent(
       query
@@ -161,7 +210,23 @@ async function searchNaverPlaces(query: string, credentials: NaverLocalSearchCre
     throw new Error(body.errorMessage ?? "네이버 지역 검색 요청에 실패했습니다.");
   }
 
-  return body.items ?? [];
+  const mapped = await Promise.all(
+    (body.items ?? []).map(async (item) => {
+      const localCandidate = mapLocalItemToCandidate(item, query);
+
+      if (localCandidate) {
+        return localCandidate;
+      }
+
+      const address = sanitizeNaverText(item.roadAddress || item.address);
+      const coordinates =
+        address && geocodeCredentials ? await geocodeAddress(address, geocodeCredentials) : null;
+
+      return coordinates ? mapNaverLocalItemToPlaceCandidate(item, query, coordinates) : null;
+    })
+  );
+
+  return mapped.filter((candidate): candidate is NaverPlaceCandidate => Boolean(candidate));
 }
 
 async function searchNaverPlaceThumbnail(
@@ -251,4 +316,24 @@ function delay(ms: number) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function setSearchParam(searchParams: URLSearchParams, key: string, value: unknown) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+
+    if (trimmed) {
+      searchParams.set(key, trimmed);
+    }
+
+    return;
+  }
+
+  if (typeof value === "number") {
+    searchParams.set(key, String(value));
+  }
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

@@ -110,7 +110,7 @@ export function inferPlaceCategory(category: string, query: string): CategoryId 
     return "date";
   }
 
-  if (/가족|한정식|샤브|뷔페|중식|갈비/.test(text)) {
+  if (/가족|한정식|샤브|뷔페|중식|갈비|고기|육류/.test(text)) {
     return "family";
   }
 

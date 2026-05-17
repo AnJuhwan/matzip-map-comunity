@@ -7,6 +7,7 @@ import {
   getNaverImageThumbnails,
   getNaverLocalSearchCredentials,
   getNearbyQueryArea,
+  isFoodOnlySearchQuery,
   mapNaverLocalItemToPlaceCandidate,
   mapToNearbyPlaceCandidate,
   parseNearbyCategories,
@@ -53,7 +54,20 @@ const NAVER_IMAGE_DISPLAY_LIMIT = 100;
 const MAX_SEARCH_QUERY_LENGTH = 80;
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
+  return handleNearbyPlaceCandidatesRequest(new URL(request.url).searchParams);
+}
+
+export async function POST(request: Request) {
+  const body = await readPostmanJsonBody(request);
+
+  if (!body) {
+    return NextResponse.json({ error: "JSON body가 올바르지 않습니다." }, { status: 400 });
+  }
+
+  return handleNearbyPlaceCandidatesRequest(buildNearbyPostSearchParams(body));
+}
+
+async function handleNearbyPlaceCandidatesRequest(searchParams: URLSearchParams) {
   const latitude = Number(searchParams.get("latitude"));
   const longitude = Number(searchParams.get("longitude"));
   const bounds = parseBounds(searchParams);
@@ -69,9 +83,11 @@ export async function GET(request: Request) {
   const location = { latitude, longitude };
   const categories = parseNearbyCategories(searchParams.get("categories"));
   const searchQuery = sanitizeSearchQuery(searchParams.get("query"));
+  const areaQuery = searchParams.get("areaQuery");
   const includePhotos = shouldIncludePhotos(searchParams);
 
   const searchCredentials = getNaverLocalSearchCredentials(process.env);
+
   if (!searchCredentials) {
     return NextResponse.json(
       {
@@ -82,17 +98,15 @@ export async function GET(request: Request) {
     );
   }
 
-  const resolvedReverseGeocodeArea =
-    searchQuery || searchParams.get("areaQuery")
-      ? null
-      : await reverseGeocodeArea(location, getNaverReverseGeocodeCredentials());
-  const queryArea = searchQuery
-    ? null
-    : getNearbyQueryArea(resolvedReverseGeocodeArea, searchParams.get("areaQuery"));
+  const shouldResolveArea = !areaQuery && (!searchQuery || isFoodOnlySearchQuery(searchQuery));
+  const resolvedReverseGeocodeArea = shouldResolveArea
+    ? await reverseGeocodeArea(location, getNaverReverseGeocodeCredentials())
+    : null;
+  const queryArea = getNearbyQueryArea(resolvedReverseGeocodeArea, areaQuery);
   const queries = buildNearbyPlaceQueries(
     resolvedReverseGeocodeArea,
     categories,
-    searchParams.get("areaQuery"),
+    areaQuery,
     searchQuery
   );
   const candidates: NaverPlaceCandidate[] = [];
@@ -108,15 +122,9 @@ export async function GET(request: Request) {
 
   try {
     for (const query of queries) {
-      const items = await searchNaverPlaces(query, searchCredentials);
+      const candidatesForQuery = await searchNaverPlaces(query, searchCredentials);
       const mapped: Array<NaverPlaceCandidate | null> = await Promise.all(
-        items.map(async (item) => {
-          const candidate = mapLocalItem(item, query);
-
-          if (!candidate) {
-            return null;
-          }
-
+        candidatesForQuery.map(async (candidate) => {
           if (bounds && !isPointInBounds(candidate, bounds)) {
             return null;
           }
@@ -158,6 +166,39 @@ export async function GET(request: Request) {
   });
 }
 
+async function readPostmanJsonBody(request: Request) {
+  try {
+    const body = (await request.json()) as unknown;
+
+    return isJsonObject(body) ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildNearbyPostSearchParams(body: Record<string, unknown>) {
+  const searchParams = new URLSearchParams();
+  const bounds = isJsonObject(body.bounds) ? body.bounds : body;
+
+  setSearchParam(searchParams, "latitude", body.latitude);
+  setSearchParam(searchParams, "longitude", body.longitude);
+  setSearchParam(searchParams, "south", bounds.south);
+  setSearchParam(searchParams, "north", bounds.north);
+  setSearchParam(searchParams, "west", bounds.west);
+  setSearchParam(searchParams, "east", bounds.east);
+  setSearchParam(searchParams, "query", body.query);
+  setSearchParam(searchParams, "areaQuery", body.areaQuery);
+  setSearchParam(searchParams, "includePhotos", body.includePhotos);
+
+  if (Array.isArray(body.categories)) {
+    searchParams.set("categories", body.categories.filter(isNonEmptyString).join(","));
+  } else {
+    setSearchParam(searchParams, "categories", body.categories);
+  }
+
+  return searchParams;
+}
+
 function mapLocalItem(item: NaverLocalSearchItem, query: string) {
   const address = sanitizeNaverText(item.roadAddress || item.address);
 
@@ -175,7 +216,14 @@ function mapLocalItem(item: NaverLocalSearchItem, query: string) {
 }
 
 async function searchNaverPlaces(query: string, credentials: NaverLocalSearchCredentials) {
-  console.log("요기가 도는거지?");
+  const items = await searchNaverLocalPlaces(query, credentials);
+
+  return items
+    .map((item) => mapLocalItem(item, query))
+    .filter((candidate): candidate is NaverPlaceCandidate => Boolean(candidate));
+}
+
+async function searchNaverLocalPlaces(query: string, credentials: NaverLocalSearchCredentials) {
   const response = await fetch(
     `https://openapi.naver.com/v1/search/local.json?query=${encodeURIComponent(
       query
@@ -190,7 +238,6 @@ async function searchNaverPlaces(query: string, credentials: NaverLocalSearchCre
   );
 
   const body = (await response.json()) as NaverLocalSearchResponse;
-  console.log(body);
 
   if (!response.ok) {
     throw new Error(body.errorMessage ?? "네이버 지역 검색 요청에 실패했습니다.");
@@ -352,4 +399,28 @@ function shouldIncludePhotos(searchParams: URLSearchParams) {
   const value = searchParams.get("includePhotos")?.trim().toLowerCase();
 
   return value === "1" || value === "true";
+}
+
+function setSearchParam(searchParams: URLSearchParams, key: string, value: unknown) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+
+    if (trimmed) {
+      searchParams.set(key, trimmed);
+    }
+
+    return;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    searchParams.set(key, String(value));
+  }
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && Boolean(value.trim());
 }
