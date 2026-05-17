@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Flag,
@@ -23,7 +24,7 @@ import {
 } from "@/entities/community";
 import { PlaceForm } from "@/features/place-editor";
 import { NaverMap } from "@/features/place-map";
-import { ReviewForm } from "@/features/review-editor";
+import { buildCandidateDetailHref, type NearbyPlaceCandidate } from "@/features/naver-place-import";
 import { useMatzipCommunity } from "../model/use-matzip-community";
 
 const categoryMap = new Map<string, (typeof PLACE_CATEGORIES)[number]>(
@@ -33,35 +34,69 @@ const tagMap = new Map<string, (typeof PLACE_TAGS)[number]>(
   PLACE_TAGS.map((item) => [item.id, item])
 );
 
-export function MatzipCommunityApp() {
-  const community = useMatzipCommunity();
+export function MatzipCommunityApp({ initialSearchQuery = "" }: { initialSearchQuery?: string }) {
+  const router = useRouter();
+  const community = useMatzipCommunity(initialSearchQuery);
   const {
     profile,
-    setSelectedPlaceId,
     panelMode,
     setPanelMode,
     activeCategoryId,
     setActiveCategoryId,
     query,
     setQuery,
+    appliedQuery,
     nicknameDraft,
     setNicknameDraft,
-    editingReview,
     setEditingReview,
     isBooting,
     message,
+    candidateMessage,
+    isLoadingCandidates,
+    userLocation,
+    mapFocusLocation,
+    locationStatus,
+    locationFocusKey,
     visiblePlaces,
     filteredPlaces,
+    filteredCandidates,
+    mapPlaces,
     selectedPlace,
-    selectedReviews,
     isSupabaseReady,
+    handleRequestUserLocation,
+    handleVisibleBoundsChange,
+    handleSearchSubmit,
     handleNicknameSave,
     handleNicknameRandomize,
     handleSavePlace,
-    handleSaveReview,
-    handleDelete,
-    handleReport,
   } = community;
+  const candidateById = new Map(
+    filteredCandidates.map((candidate) => [candidate.tempId, candidate])
+  );
+
+  function openMapPlace(placeId: string) {
+    const candidate = candidateById.get(placeId);
+
+    if (candidate) {
+      router.push(buildCandidateDetailHref(candidate));
+      return;
+    }
+
+    router.push(`/places/${placeId}`);
+  }
+
+  async function handleSavePlaceAndOpen(input: Parameters<typeof handleSavePlace>[0]) {
+    const saved = await handleSavePlace(input);
+
+    if (saved) {
+      router.push(`/places/${saved.id}`);
+    }
+  }
+
+  function handleRequestUserLocationAndClearSearch() {
+    handleRequestUserLocation();
+    router.replace("/");
+  }
 
   if (isBooting) {
     return (
@@ -90,12 +125,15 @@ export function MatzipCommunityApp() {
     <main className="min-h-screen bg-[#f6faf7] text-[#17352b]">
       <div className="grid min-h-screen lg:grid-cols-[minmax(0,1fr)_520px]">
         <NaverMap
-          places={filteredPlaces.length ? filteredPlaces : visiblePlaces}
+          places={mapPlaces}
           selectedPlaceId={selectedPlace?.id}
-          onSelectPlace={(placeId) => {
-            setSelectedPlaceId(placeId);
-            setPanelMode("browse");
-          }}
+          userLocation={userLocation}
+          focusLocation={mapFocusLocation}
+          locationStatus={locationStatus}
+          locationFocusKey={locationFocusKey}
+          onSelectPlace={openMapPlace}
+          onRequestUserLocation={handleRequestUserLocationAndClearSearch}
+          onVisibleBoundsChange={handleVisibleBoundsChange}
         />
 
         <aside className="flex max-h-none flex-col border-l border-[#d9e4dd] bg-[#fbfdfb] lg:max-h-screen">
@@ -122,15 +160,30 @@ export function MatzipCommunityApp() {
               </div>
             </div>
 
-            <div className="mt-4 flex items-center gap-2 rounded-md border border-[#d9e4dd] bg-white px-3">
-              <Search size={18} className="text-[#70847b]" />
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                const nextQuery = query.trim();
+                handleSearchSubmit();
+                router.replace(nextQuery ? `/?search=${encodeURIComponent(nextQuery)}` : "/");
+              }}
+              className="mt-4 flex items-center gap-2 rounded-md border border-[#d9e4dd] bg-white px-3"
+            >
+              <Search size={18} className="shrink-0 text-[#70847b]" />
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="가게명, 주소, 태그 검색"
+                placeholder="역, 동네, 음식점 검색"
                 className="h-11 min-w-0 flex-1 bg-transparent text-sm outline-none"
               />
-            </div>
+              <button
+                type="submit"
+                className="my-1 flex h-9 shrink-0 items-center gap-1 rounded-md bg-[#17352b] px-3 text-sm font-black text-white transition hover:bg-[#0f7a5f]"
+              >
+                <Search size={15} />
+                검색하기
+              </button>
+            </form>
 
             <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
               <CategoryButton
@@ -200,7 +253,7 @@ export function MatzipCommunityApp() {
                 ownerAnonymousId={profile.id}
                 places={visiblePlaces}
                 onCancel={() => setPanelMode("browse")}
-                onSave={handleSavePlace}
+                onSave={handleSavePlaceAndOpen}
               />
             ) : null}
 
@@ -210,7 +263,7 @@ export function MatzipCommunityApp() {
                 places={visiblePlaces}
                 editingPlace={selectedPlace}
                 onCancel={() => setPanelMode("browse")}
-                onSave={handleSavePlace}
+                onSave={handleSavePlaceAndOpen}
               />
             ) : null}
 
@@ -220,10 +273,10 @@ export function MatzipCommunityApp() {
                   <div className="mb-3 flex items-center justify-between">
                     <h2 className="flex items-center gap-2 text-lg font-black">
                       <Utensils size={20} />
-                      맛집 목록
+                      {appliedQuery ? `${appliedQuery} 주변 음식점` : "현재 지도 음식점"}
                     </h2>
                     <span className="text-sm font-bold text-[#70847b]">
-                      {filteredPlaces.length}곳
+                      {filteredPlaces.length + filteredCandidates.length}곳
                     </span>
                   </div>
                   <div className="space-y-3">
@@ -232,36 +285,33 @@ export function MatzipCommunityApp() {
                         key={place.id}
                         place={place}
                         active={place.id === selectedPlace?.id}
-                        onClick={() => setSelectedPlaceId(place.id)}
+                        onClick={() => router.push(`/places/${place.id}`)}
                       />
                     ))}
+                    {filteredCandidates.map((candidate) => (
+                      <CandidateListItem
+                        key={candidate.tempId}
+                        candidate={candidate}
+                        onClick={() => router.push(buildCandidateDetailHref(candidate))}
+                      />
+                    ))}
+                    {!filteredPlaces.length && !filteredCandidates.length ? (
+                      <div className="rounded-md border border-dashed border-[#b8c9c0] bg-white p-4 text-sm font-semibold text-[#70847b]">
+                        현재 지도 화면에 표시할 맛집이 없습니다.
+                      </div>
+                    ) : null}
                   </div>
                 </section>
 
-                {selectedPlace ? (
-                  <section className="border-t border-[#d9e4dd] pt-5">
-                    <PlaceDetail
-                      place={selectedPlace}
-                      reviews={selectedReviews}
-                      profile={profile}
-                      onEditPlace={() => setPanelMode("edit-place")}
-                      onDeletePlace={() => handleDelete("place", selectedPlace.id)}
-                      onReportPlace={() => handleReport("place", selectedPlace.id)}
-                      onEditReview={setEditingReview}
-                      onDeleteReview={(reviewId) => handleDelete("review", reviewId)}
-                      onReportReview={(reviewId) => handleReport("review", reviewId)}
-                    />
-                    <div className="mt-5 rounded-md border border-[#d9e4dd] bg-white p-4">
-                      <ReviewForm
-                        key={editingReview?.id ?? selectedPlace.id}
-                        placeId={selectedPlace.id}
-                        profile={profile}
-                        editingReview={editingReview}
-                        onCancelEdit={() => setEditingReview(null)}
-                        onSave={handleSaveReview}
-                      />
-                    </div>
-                  </section>
+                {isLoadingCandidates ? (
+                  <div className="rounded-md border border-[#d9e4dd] bg-white p-3 text-sm font-semibold text-[#52635b]">
+                    네이버 후보를 찾는 중입니다.
+                  </div>
+                ) : null}
+                {candidateMessage ? (
+                  <div className="rounded-md border border-[#f3c57a] bg-[#fff8e7] p-3 text-sm font-semibold text-[#765018]">
+                    {candidateMessage}
+                  </div>
                 ) : null}
               </div>
             ) : null}
@@ -301,7 +351,7 @@ function PlaceListItem({
   active,
   onClick,
 }: {
-  place: Place;
+  place: Place & { distanceMeters?: number };
   active: boolean;
   onClick: () => void;
 }) {
@@ -357,7 +407,64 @@ function PlaceListItem({
   );
 }
 
-function PlaceDetail({
+function CandidateListItem({
+  candidate,
+  onClick,
+}: {
+  candidate: NearbyPlaceCandidate;
+  onClick: () => void;
+}) {
+  const category = categoryMap.get(candidate.categoryId);
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full rounded-md border border-dashed border-[#8fb9a8] bg-white p-3 text-left transition hover:border-[#0f7a5f]"
+    >
+      <div className="flex gap-3">
+        {candidate.heroImageUrl ? (
+          <div
+            className="h-20 w-20 shrink-0 rounded-md bg-cover bg-center"
+            style={imageBackground(candidate.heroImageUrl)}
+            aria-hidden="true"
+          />
+        ) : (
+          <div className="grid h-20 w-20 shrink-0 place-items-center rounded-md bg-[#eef8f2] text-[#0f7a5f]">
+            <Utensils size={24} />
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start gap-2">
+            <h3 className="truncate text-base font-black">{candidate.name}</h3>
+            <span className="shrink-0 rounded-md bg-[#fff8e7] px-2 py-1 text-xs font-black text-[#765018]">
+              네이버 음식점
+            </span>
+            {category ? (
+              <span className="shrink-0 rounded-md bg-[#eef8f2] px-2 py-1 text-xs font-black text-[#0f7a5f]">
+                {category.label}
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-1 line-clamp-1 text-sm text-[#5f6f68]">{candidate.address}</p>
+          <div className="mt-2 flex flex-wrap gap-1">
+            {candidate.tagIds.slice(0, 3).map((tagId) => (
+              <span
+                key={tagId}
+                className="rounded-md bg-[#f2f0e8] px-2 py-1 text-xs font-bold text-[#6d6047]"
+              >
+                {tagMap.get(tagId)?.label ?? tagId}
+              </span>
+            ))}
+          </div>
+          <p className="mt-2 text-xs font-bold text-[#70847b]">첫 리뷰를 쓰면 저장됩니다.</p>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+export function PlaceDetail({
   place,
   reviews,
   profile,
@@ -391,6 +498,18 @@ function PlaceDetail({
             aria-hidden="true"
           />
         ) : null}
+        {place.photoUrls?.length ? (
+          <div className="flex gap-2 overflow-x-auto border-b border-[#edf3ef] px-4 py-3">
+            {place.photoUrls.slice(0, 8).map((photoUrl) => (
+              <div
+                key={photoUrl}
+                className="h-20 w-28 shrink-0 rounded-md bg-cover bg-center"
+                style={imageBackground(photoUrl)}
+                aria-hidden="true"
+              />
+            ))}
+          </div>
+        ) : null}
         <div className="p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -409,7 +528,7 @@ function PlaceDetail({
                   </span>
                 ))}
               </div>
-              <h2 className="mt-3 text-2xl font-black">{place.name}</h2>
+              <h1 className="mt-3 text-2xl font-black">{place.name}</h1>
               <p className="mt-2 flex items-center gap-2 text-sm text-[#5f6f68]">
                 <MapPin size={16} />
                 {place.address}
@@ -450,7 +569,7 @@ function PlaceDetail({
 
       <div>
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-lg font-black">투명한 리뷰</h3>
+          <h3 className="text-lg font-black">리뷰 리스트</h3>
           <span className="text-sm font-bold text-[#70847b]">{reviews.length}개</span>
         </div>
         <div className="space-y-3">
