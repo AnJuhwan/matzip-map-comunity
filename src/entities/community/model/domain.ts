@@ -28,6 +28,7 @@ export type ContentStatus = "public" | "hidden" | "deleted";
 export type RevisitIntent = "yes" | "maybe" | "no";
 
 export type PlaceDraft = {
+  naverPlaceKey?: string;
   name: string;
   address: string;
   latitude: number;
@@ -36,6 +37,7 @@ export type PlaceDraft = {
   tagIds: string[];
   ownerAnonymousId: string;
   heroImageUrl?: string;
+  photoUrls?: string[];
 };
 
 export type Place = PlaceDraft & {
