@@ -3,8 +3,12 @@ import {
   clearNaverMapMarkers,
   DEFAULT_MAP_VIEW,
   getFallbackMapMarkers,
+  getCenteredGeoBounds,
   getInitialMapView,
+  getPlaceMarkerSummary,
   installNaverMapAuthFailureHandler,
+  readNaverMapBounds,
+  shouldApplyProgrammaticMapFocus,
 } from "./map-view";
 import type { Place } from "@/entities/community";
 
@@ -38,7 +42,7 @@ describe("getInitialMapView", () => {
     expect(getInitialMapView(places, "p-2")).toEqual({
       latitude: 35.1578,
       longitude: 129.0592,
-      zoom: 13,
+      zoom: 16,
     });
   });
 
@@ -46,12 +50,28 @@ describe("getInitialMapView", () => {
     expect(getInitialMapView(places, "missing")).toEqual({
       latitude: 37.5446,
       longitude: 127.0558,
-      zoom: 13,
+      zoom: 16,
     });
   });
 
   it("still returns a default map view when there are no places", () => {
-    expect(getInitialMapView([], undefined)).toEqual(DEFAULT_MAP_VIEW);
+    expect(getInitialMapView([], undefined)).toEqual({
+      ...DEFAULT_MAP_VIEW,
+      zoom: 16,
+    });
+  });
+
+  it("centers on the user location when no place is selected", () => {
+    expect(
+      getInitialMapView(places, undefined, {
+        latitude: 37.5665,
+        longitude: 126.978,
+      })
+    ).toEqual({
+      latitude: 37.5665,
+      longitude: 126.978,
+      zoom: 16,
+    });
   });
 });
 
@@ -98,6 +118,80 @@ describe("installNaverMapAuthFailureHandler", () => {
     cleanup();
 
     expect(target.navermap_authFailure).toBeUndefined();
+  });
+});
+
+describe("readNaverMapBounds", () => {
+  it("maps Naver southwest and northeast coordinates into geographic bounds", () => {
+    const bounds = {
+      getSW: () => ({
+        lat: () => 37.56,
+        lng: () => 126.97,
+      }),
+      getNE: () => ({
+        lat: () => 37.57,
+        lng: () => 126.99,
+      }),
+    };
+
+    expect(readNaverMapBounds(bounds)).toEqual({
+      south: 37.56,
+      north: 37.57,
+      west: 126.97,
+      east: 126.99,
+    });
+  });
+});
+
+describe("shouldApplyProgrammaticMapFocus", () => {
+  it("applies focus only when a new positive focus key arrives", () => {
+    expect(shouldApplyProgrammaticMapFocus(1, 0)).toBe(true);
+    expect(shouldApplyProgrammaticMapFocus(2, 1)).toBe(true);
+    expect(shouldApplyProgrammaticMapFocus(1, 1)).toBe(false);
+    expect(shouldApplyProgrammaticMapFocus(0, 0)).toBe(false);
+    expect(shouldApplyProgrammaticMapFocus(1, 2)).toBe(false);
+  });
+});
+
+describe("getCenteredGeoBounds", () => {
+  it("creates a visible fallback bounds box around a center coordinate", () => {
+    const bounds = getCenteredGeoBounds(
+      {
+        latitude: 37.52,
+        longitude: 126.91,
+      },
+      {
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.04,
+      }
+    );
+
+    expect(bounds.south).toBeCloseTo(37.51);
+    expect(bounds.north).toBeCloseTo(37.53);
+    expect(bounds.west).toBeCloseTo(126.89);
+    expect(bounds.east).toBeCloseTo(126.93);
+  });
+});
+
+describe("getPlaceMarkerSummary", () => {
+  it("formats saved review stats as compact marker labels", () => {
+    expect(
+      getPlaceMarkerSummary({
+        ...places[0],
+        reviewCount: 3,
+        averageRevisitScore: 0.8,
+      })
+    ).toEqual({
+      reviewLabel: "리뷰 3",
+      ratingLabel: "★ 4.0",
+    });
+  });
+
+  it("shows an empty review state for Naver restaurants without local reviews", () => {
+    expect(getPlaceMarkerSummary({ ...places[0], reviewCount: 0 })).toEqual({
+      reviewLabel: "리뷰 0",
+      ratingLabel: "평점 준비중",
+    });
   });
 });
 
