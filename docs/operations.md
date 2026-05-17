@@ -30,8 +30,8 @@ NAVER_IMPORT_ADMIN_TOKEN=
 - `NEXT_PUBLIC_NAVER_MAP_CLIENT_ID`: 네이버지도 JavaScript API client id
 - `NAVER_MAP_CLIENT_ID`: 서버 지오코딩 요청용 client id
 - `NAVER_MAP_CLIENT_SECRET`: 서버 지오코딩 요청용 secret
-- `NAVER_SEARCH_CLIENT_ID`: 네이버 지역 검색 후보 조회용 client id
-- `NAVER_SEARCH_CLIENT_SECRET`: 네이버 지역 검색 후보 조회용 secret
+- `NAVER_SEARCH_CLIENT_ID`: 네이버 음식점 후보 조회와 이미지 검색용 Search API client id
+- `NAVER_SEARCH_CLIENT_SECRET`: 네이버 음식점 후보 조회와 이미지 검색용 Search API secret
 - `NAVER_IMPORT_ADMIN_TOKEN`: 운영자 후보 조회 API 호출 시 `x-matzip-admin-token` 헤더로 보낼 서버 전용 토큰
 
 ## Supabase 설정
@@ -56,8 +56,22 @@ NAVER_IMPORT_ADMIN_TOKEN=
 
 - 지도 렌더링에는 `NEXT_PUBLIC_NAVER_MAP_CLIENT_ID`가 필요하다.
 - 주소 검색에는 `NAVER_MAP_CLIENT_ID`, `NAVER_MAP_CLIENT_SECRET`가 필요하다.
+- 음식점 후보 조회와 운영자 import 후보 조회는 네이버 Developers Search API의 지역 검색을 사용한다.
+- 후보 조회를 사용하려면 서버에 `NAVER_SEARCH_CLIENT_ID`, `NAVER_SEARCH_CLIENT_SECRET`을 설정한다.
 - 네이버 플레이스 데이터를 복제하지 않고, 사용자가 입력한 가게명과 주소를 저장한다.
 - `/api/naver-places`는 운영자 검토용 후보 조회 API다. `NAVER_IMPORT_ADMIN_TOKEN`과 일치하는 `x-matzip-admin-token` 헤더가 있어야 호출할 수 있고, 후보를 자동 공개 데이터로 저장하지 않는다.
+
+### Postman 후보 API 호출
+
+1. Postman에서 `docs/postman/matzip-map-community.postman_collection.json`을 import한다.
+2. `docs/postman/matzip-map-community.local.postman_environment.json`을 import하고 environment로 선택한다.
+3. 로컬 서버를 `npm run dev`로 실행한다. 포트를 바꿨다면 environment의 `baseUrl`도 같이 바꾼다.
+4. 관리자 후보 조회를 실행할 때는 `.env.local`의 `NAVER_IMPORT_ADMIN_TOKEN`과 같은 값을 environment의 `adminToken`에 넣는다.
+
+Postman collection은 다음 요청을 포함한다.
+
+- `POST /api/nearby-place-candidates`: 현재 위치, visible bounds, 검색어를 JSON body로 보내 후보를 조회한다.
+- `POST /api/naver-places`: `x-matzip-admin-token` 헤더와 query, limit JSON body로 운영자용 후보를 조회한다.
 
 ### 주소 검색 401 확인
 

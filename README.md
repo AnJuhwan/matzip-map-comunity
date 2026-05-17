@@ -100,12 +100,19 @@ NAVER_MAP_CLIENT_ID=
 NAVER_MAP_CLIENT_SECRET=
 NAVER_SEARCH_CLIENT_ID=
 NAVER_SEARCH_CLIENT_SECRET=
+NAVER_IMPORT_ADMIN_TOKEN=
 ```
 
 `NEXT_PUBLIC_NAVER_MAP_CLIENT_ID`가 없으면 실제 네이버지도 대신 fallback 지도가 표시됩니다. `NAVER_MAP_CLIENT_ID`와 `NAVER_MAP_CLIENT_SECRET`가 없으면 주소 검색은 개발용 fallback 좌표를 반환합니다.
-네이버 지역 검색으로 맛집을 가져오려면 네이버 Developers 검색 API용 `NAVER_SEARCH_CLIENT_ID`와 `NAVER_SEARCH_CLIENT_SECRET`을 추가로 설정해야 합니다.
+네이버 맛집 후보 조회와 이미지 검색에는 네이버 Developers 검색 API용 `NAVER_SEARCH_CLIENT_ID`와 `NAVER_SEARCH_CLIENT_SECRET`이 필요합니다.
 
-Vercel production에는 화면 렌더링에 필요한 공개 환경변수인 `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`를 설정합니다. 네이버지도를 production에서 사용하려면 Naver Developers 콘솔에 `https://matzip-map-community.vercel.app` 도메인을 허용 등록한 뒤 `NEXT_PUBLIC_NAVER_MAP_CLIENT_ID`를 Vercel production 환경변수로 추가합니다. 주소 검색과 네이버 지역 검색/import 기능까지 production에서 사용하려면 서버 전용 `NAVER_MAP_CLIENT_SECRET`, `NAVER_SEARCH_CLIENT_ID`, `NAVER_SEARCH_CLIENT_SECRET`, `NAVER_IMPORT_ADMIN_TOKEN`도 Vercel 환경변수로 추가합니다.
+Vercel production에는 화면 렌더링에 필요한 공개 환경변수인 `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`를 설정합니다. 네이버지도를 production에서 사용하려면 Naver Developers 콘솔에 `https://matzip-map-community.vercel.app` 도메인을 허용 등록한 뒤 `NEXT_PUBLIC_NAVER_MAP_CLIENT_ID`를 Vercel production 환경변수로 추가합니다. 주소 검색과 네이버 후보/import 이미지까지 production에서 사용하려면 서버 전용 `NAVER_MAP_CLIENT_SECRET`, `NAVER_SEARCH_CLIENT_ID`, `NAVER_SEARCH_CLIENT_SECRET`, `NAVER_IMPORT_ADMIN_TOKEN`도 Vercel 환경변수로 추가합니다.
+
+## Postman 호출
+
+Postman에서 `docs/postman/matzip-map-community.postman_collection.json`와 `docs/postman/matzip-map-community.local.postman_environment.json`을 import합니다. 로컬 서버는 `npm run dev`로 띄우고, environment의 `baseUrl`은 기본값 `http://localhost:3000`을 사용합니다.
+
+관리자 후보 조회 요청을 실행하려면 `.env.local`의 `NAVER_IMPORT_ADMIN_TOKEN` 값과 같은 값을 Postman environment의 `adminToken`에 넣습니다. collection에는 JSON body로 호출하는 `POST /api/nearby-place-candidates`, `POST /api/naver-places` 예시가 들어 있습니다.
 
 ## Supabase
 

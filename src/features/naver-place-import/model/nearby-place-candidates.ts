@@ -20,6 +20,20 @@ export type NearbyPlaceCandidate = NaverPlaceCandidate & {
   source: "naver";
 };
 
+export type FoodSearchIntent =
+  | {
+      kind: "food";
+      foodQuery: string;
+      candidateQuery: string;
+    }
+  | {
+      kind: "area-food";
+      areaQuery: string;
+      areaFocusQuery: string;
+      foodQuery: string;
+      candidateQuery: string;
+    };
+
 const nearbyCategoryLabels: Record<NearbyPlaceCategory, string> = {
   food: "맛집",
   cafe: "카페",
@@ -36,6 +50,51 @@ const candidateCategoryIds = new Set<CategoryId>([
   "local",
 ]);
 
+const foodSearchTerms = [
+  "돼지갈비",
+  "양념갈비",
+  "소갈비",
+  "갈비탕",
+  "고기집",
+  "고깃집",
+  "음식점",
+  "레스토랑",
+  "삼겹살",
+  "소고기",
+  "돼지고기",
+  "오마카세",
+  "이탈리안",
+  "파스타",
+  "스테이크",
+  "족발",
+  "보쌈",
+  "곱창",
+  "막창",
+  "냉면",
+  "국밥",
+  "초밥",
+  "스시",
+  "라멘",
+  "라면",
+  "분식",
+  "김밥",
+  "떡볶이",
+  "치킨",
+  "피자",
+  "중식",
+  "일식",
+  "양식",
+  "한식",
+  "밥집",
+  "식당",
+  "맛집",
+  "갈비",
+  "고기",
+].sort((first, second) => compactAreaQuery(second).length - compactAreaQuery(first).length);
+
+const areaFocusSuffixPattern = /(역|동|구|군|시|읍|면|리|로|길|시장|터미널|공항|대학교|대)$/;
+const minAreaSearchLength = 2;
+
 export function buildNearbyPlaceQueries(
   area: ReverseGeocodeArea | null,
   categories: NearbyPlaceCategory[],
@@ -45,7 +104,21 @@ export function buildNearbyPlaceQueries(
   const normalizedSearchQuery = normalizeAreaQuery(searchQuery);
 
   if (normalizedSearchQuery) {
-    return buildSearchTextQueries(normalizedSearchQuery, categories);
+    const foodSearchIntent = parseFoodSearchIntent(normalizedSearchQuery);
+
+    if (foodSearchIntent?.kind === "food") {
+      const areaName = getNearbyQueryArea(area, manualAreaQuery);
+      const localFoodQuery = areaName
+        ? `${areaName} ${foodSearchIntent.foodQuery}`
+        : foodSearchIntent.candidateQuery;
+
+      return buildSearchTextQueries(localFoodQuery, categories);
+    }
+
+    return buildSearchTextQueries(
+      foodSearchIntent?.candidateQuery ?? normalizedSearchQuery,
+      categories
+    );
   }
 
   const areaName = getNearbyQueryArea(area, manualAreaQuery);
@@ -71,6 +144,64 @@ export function getNearbyQueryArea(
     normalizeAreaQuery(area?.area1) ||
     null
   );
+}
+
+export function parseFoodSearchIntent(searchQuery?: string | null): FoodSearchIntent | null {
+  const normalizedSearchQuery = normalizeAreaQuery(searchQuery);
+
+  if (!normalizedSearchQuery) {
+    return null;
+  }
+
+  const compactSearchQuery = compactAreaQuery(normalizedSearchQuery);
+
+  for (const foodTerm of foodSearchTerms) {
+    const compactFoodTerm = compactAreaQuery(foodTerm);
+
+    if (compactSearchQuery === compactFoodTerm) {
+      return {
+        kind: "food",
+        foodQuery: normalizedSearchQuery,
+        candidateQuery: normalizedSearchQuery,
+      };
+    }
+
+    if (!compactSearchQuery.endsWith(compactFoodTerm)) {
+      continue;
+    }
+
+    const compactArea = compactSearchQuery.slice(0, -compactFoodTerm.length);
+
+    if (compactArea.length < minAreaSearchLength) {
+      continue;
+    }
+
+    const areaQuery = getOriginalPrefixByCompactLength(normalizedSearchQuery, compactArea.length);
+
+    if (!areaQuery) {
+      continue;
+    }
+
+    const foodQuery = normalizedSearchQuery.slice(areaQuery.length).trim() || foodTerm;
+
+    return {
+      kind: "area-food",
+      areaQuery,
+      areaFocusQuery: buildAreaFocusQuery(areaQuery),
+      foodQuery,
+      candidateQuery: `${areaQuery} ${foodQuery}`.trim(),
+    };
+  }
+
+  return null;
+}
+
+export function isFoodOnlySearchQuery(searchQuery?: string | null) {
+  return parseFoodSearchIntent(searchQuery)?.kind === "food";
+}
+
+function buildAreaFocusQuery(areaQuery: string) {
+  return areaFocusSuffixPattern.test(areaQuery) ? areaQuery : `${areaQuery}역`;
 }
 
 export function mapToNearbyPlaceCandidate(
@@ -181,11 +312,17 @@ function getNearbyCategoryLabels(category: NearbyPlaceCategory) {
 
 function buildSearchTextQueries(searchQuery: string, categories: NearbyPlaceCategory[]) {
   const queries = new Set<string>();
-  const hasFoodIntent = /음식점|맛집|식당|밥집|한식|중식|일식|양식/.test(searchQuery);
+  const hasFoodIntent = hasFoodSearchTerm(searchQuery);
 
   if (hasFoodIntent) {
     queries.add(searchQuery);
-    queries.add(searchQuery.replace(/음식점/g, "맛집"));
+
+    if (searchQuery.includes("음식점")) {
+      queries.add(searchQuery.replace(/음식점/g, "맛집"));
+    } else if (!searchQuery.includes("맛집")) {
+      queries.add(`${searchQuery} 맛집`);
+    }
+
     return Array.from(queries);
   }
 
@@ -240,4 +377,35 @@ function hashCandidate(
 
 function normalizeAreaQuery(value?: string | null) {
   return value?.replace(/\s+/g, " ").trim() || null;
+}
+
+function hasFoodSearchTerm(searchQuery: string) {
+  const compactSearchQuery = compactAreaQuery(searchQuery);
+
+  return foodSearchTerms.some((foodTerm) =>
+    compactSearchQuery.includes(compactAreaQuery(foodTerm))
+  );
+}
+
+function compactAreaQuery(value: string) {
+  return value.replace(/\s+/g, "").toLowerCase();
+}
+
+function getOriginalPrefixByCompactLength(value: string, compactLength: number) {
+  let visibleCharacters = 0;
+  let endIndex = 0;
+
+  for (const [index, character] of Array.from(value).entries()) {
+    if (!/\s/.test(character)) {
+      visibleCharacters += 1;
+    }
+
+    endIndex = index + character.length;
+
+    if (visibleCharacters === compactLength) {
+      break;
+    }
+  }
+
+  return value.slice(0, endIndex).trim();
 }

@@ -3,6 +3,7 @@ import {
   buildCandidateDetailHref,
   buildNearbyPlaceQueries,
   mapToNearbyPlaceCandidate,
+  parseFoodSearchIntent,
   parseCandidateSearchParams,
 } from "./nearby-place-candidates";
 
@@ -45,6 +46,33 @@ describe("buildNearbyPlaceQueries", () => {
       "마곡역 음식점",
       "마곡역 맛집",
     ]);
+  });
+
+  it("prefixes food-only searches with the visible map area", () => {
+    expect(buildNearbyPlaceQueries(null, ["food"], "마곡동", "갈비")).toEqual([
+      "마곡동 갈비",
+      "마곡동 갈비 맛집",
+    ]);
+  });
+});
+
+describe("parseFoodSearchIntent", () => {
+  it("keeps food-only searches near the current map", () => {
+    expect(parseFoodSearchIntent(" 갈비 ")).toEqual({
+      kind: "food",
+      foodQuery: "갈비",
+      candidateQuery: "갈비",
+    });
+  });
+
+  it("splits compact area and food searches", () => {
+    expect(parseFoodSearchIntent("마곡갈비")).toEqual({
+      kind: "area-food",
+      areaQuery: "마곡",
+      areaFocusQuery: "마곡역",
+      foodQuery: "갈비",
+      candidateQuery: "마곡 갈비",
+    });
   });
 });
 

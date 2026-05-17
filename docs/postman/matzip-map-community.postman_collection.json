@@ -1,0 +1,68 @@
+{
+  "info": {
+    "_postman_id": "4f8c2df4-2f2f-4a82-9f96-f61b495d7f74",
+    "name": "맛잘알 동네지도",
+    "description": "Local Postman requests for checking Naver place candidate APIs.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Nearby candidates - JSON body",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"latitude\": 37.5446,\n  \"longitude\": 127.0558,\n  \"bounds\": {\n    \"south\": 37.54,\n    \"north\": 37.55,\n    \"west\": 127.04,\n    \"east\": 127.06\n  },\n  \"query\": \"성수 맛집\",\n  \"categories\": [\"food\"],\n  \"includePhotos\": false\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/nearby-place-candidates",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "nearby-place-candidates"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Admin Naver places - JSON body",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "x-matzip-admin-token",
+            "value": "{{adminToken}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"성수 맛집\",\n  \"limit\": 10\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/naver-places",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "naver-places"]
+        }
+      },
+      "response": []
+    }
+  ]
+}
