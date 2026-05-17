@@ -15,6 +15,7 @@ export type NaverLocalSearchItem = {
 };
 
 export type NaverPlaceCandidate = {
+  naverPlaceKey?: string;
   name: string;
   address: string;
   latitude: number;
@@ -23,6 +24,12 @@ export type NaverPlaceCandidate = {
   tagIds: string[];
   sourceCategory?: string;
   sourceQuery?: string;
+  heroImageUrl?: string;
+  photoUrls?: string[];
+};
+
+export type NaverImageSearchItem = {
+  thumbnail?: string;
 };
 
 const NAVER_LOCAL_SEARCH_QUERIES = [
@@ -123,18 +130,47 @@ export function mapNaverLocalItemToPlaceCandidate(
   sourceQuery: string,
   coordinates: { latitude: number; longitude: number }
 ): NaverPlaceCandidate {
+  const name = sanitizeNaverText(item.title);
+  const address = sanitizeNaverText(item.roadAddress || item.address);
   const sourceCategory = sanitizeNaverText(item.category);
 
   return {
-    name: sanitizeNaverText(item.title),
-    address: sanitizeNaverText(item.roadAddress || item.address),
+    naverPlaceKey: buildNaverPlaceKey({
+      name,
+      address,
+      latitude: coordinates.latitude,
+      longitude: coordinates.longitude,
+    }),
+    name,
+    address,
     latitude: coordinates.latitude,
     longitude: coordinates.longitude,
     categoryId: inferPlaceCategory(sourceCategory, sourceQuery),
     tagIds: inferTags(sourceCategory, sourceQuery),
     sourceCategory,
     sourceQuery,
+    photoUrls: [],
   };
+}
+
+export function buildNaverPlaceImageQuery(
+  candidate: Pick<NaverPlaceCandidate, "name" | "address">
+) {
+  return `${candidate.name} ${candidate.address} 음식점`.trim();
+}
+
+export function getNaverImageThumbnail(items: NaverImageSearchItem[]) {
+  return items.find((item) => item.thumbnail?.trim())?.thumbnail?.trim();
+}
+
+export function getNaverImageThumbnails(items: NaverImageSearchItem[]) {
+  return Array.from(
+    new Set(
+      items
+        .map((item) => item.thumbnail?.trim())
+        .filter((thumbnail): thumbnail is string => Boolean(thumbnail))
+    )
+  );
 }
 
 export function getCoordinatesFromNaverLocalItem(item: NaverLocalSearchItem) {
@@ -159,7 +195,9 @@ export function dedupeNaverPlaceCandidates(candidates: NaverPlaceCandidate[]) {
   const seen = new Set<string>();
 
   return candidates.filter((candidate) => {
-    const key = `${compactText(candidate.name)}:${normalizeAddress(candidate.address)}`;
+    const key =
+      candidate.naverPlaceKey ??
+      `${compactText(candidate.name)}:${normalizeAddress(candidate.address)}`;
 
     if (seen.has(key)) {
       return false;
@@ -168,6 +206,18 @@ export function dedupeNaverPlaceCandidates(candidates: NaverPlaceCandidate[]) {
     seen.add(key);
     return true;
   });
+}
+
+export function buildNaverPlaceKey(
+  place: Pick<NaverPlaceCandidate, "name" | "address" | "latitude" | "longitude">
+) {
+  return [
+    "naver",
+    compactText(place.name),
+    normalizeAddress(place.address),
+    place.latitude.toFixed(6),
+    place.longitude.toFixed(6),
+  ].join(":");
 }
 
 function inferTags(category: string, query: string) {

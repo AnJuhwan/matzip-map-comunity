@@ -12,7 +12,7 @@ type GeocodeResult = {
   address: string;
   latitude: number;
   longitude: number;
-  source: "naver" | "fallback";
+  source: "naver" | "naver-local-search" | "fallback";
 };
 
 export type PlaceFormProps = {
