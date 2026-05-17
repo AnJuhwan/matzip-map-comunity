@@ -1,4 +1,4 @@
-import type { Place } from "@/entities/community";
+import type { GeoBounds, Place, UserLocation } from "@/entities/community";
 
 export type MapView = {
   latitude: number;
@@ -9,10 +9,12 @@ export type MapView = {
 export const DEFAULT_MAP_VIEW: MapView = {
   latitude: 37.5665,
   longitude: 126.978,
-  zoom: 11,
+  zoom: 16,
 };
 
-const PLACE_MAP_ZOOM = 13;
+export const FOCUSED_MAP_ZOOM = 16;
+const PLACE_MAP_ZOOM = FOCUSED_MAP_ZOOM;
+const USER_LOCATION_MAP_ZOOM = FOCUSED_MAP_ZOOM;
 const FALLBACK_LABEL_LIMIT = 12;
 const FALLBACK_MARKER_MARGIN = 12;
 
@@ -32,16 +34,50 @@ type NaverMapMarkerLike = {
   setMap(map: unknown | null): void;
 };
 
-export function getInitialMapView(places: Place[], selectedPlaceId?: string): MapView {
-  const selectedPlace = places.find((place) => place.id === selectedPlaceId) ?? places[0];
+type NaverLatLngLike = {
+  lat(): number;
+  lng(): number;
+};
 
-  if (!selectedPlace) {
+type NaverMapBoundsLike = {
+  getSW(): NaverLatLngLike;
+  getNE(): NaverLatLngLike;
+};
+
+export function getInitialMapView(
+  places: Place[],
+  selectedPlaceId?: string,
+  userLocation?: Pick<UserLocation, "latitude" | "longitude">
+): MapView {
+  const selectedPlace = selectedPlaceId
+    ? places.find((place) => place.id === selectedPlaceId)
+    : undefined;
+
+  if (selectedPlace) {
+    return {
+      latitude: selectedPlace.latitude,
+      longitude: selectedPlace.longitude,
+      zoom: PLACE_MAP_ZOOM,
+    };
+  }
+
+  if (userLocation) {
+    return {
+      latitude: userLocation.latitude,
+      longitude: userLocation.longitude,
+      zoom: USER_LOCATION_MAP_ZOOM,
+    };
+  }
+
+  const firstPlace = places[0];
+
+  if (!firstPlace) {
     return DEFAULT_MAP_VIEW;
   }
 
   return {
-    latitude: selectedPlace.latitude,
-    longitude: selectedPlace.longitude,
+    latitude: firstPlace.latitude,
+    longitude: firstPlace.longitude,
     zoom: PLACE_MAP_ZOOM,
   };
 }
@@ -107,6 +143,49 @@ export function clearNaverMapMarkers(markers: NaverMapMarkerLike[]) {
       // The Naver SDK can throw during marker cleanup after auth failures.
     }
   });
+}
+
+export function readNaverMapBounds(bounds: NaverMapBoundsLike): GeoBounds {
+  const southWest = bounds.getSW();
+  const northEast = bounds.getNE();
+
+  return {
+    south: southWest.lat(),
+    north: northEast.lat(),
+    west: southWest.lng(),
+    east: northEast.lng(),
+  };
+}
+
+export function getCenteredGeoBounds(
+  center: Pick<MapView, "latitude" | "longitude">,
+  options: { latitudeDelta?: number; longitudeDelta?: number } = {}
+): GeoBounds {
+  const latitudeDelta = options.latitudeDelta ?? 0.02;
+  const longitudeDelta = options.longitudeDelta ?? 0.02;
+
+  return {
+    south: center.latitude - latitudeDelta / 2,
+    north: center.latitude + latitudeDelta / 2,
+    west: center.longitude - longitudeDelta / 2,
+    east: center.longitude + longitudeDelta / 2,
+  };
+}
+
+export function getPlaceMarkerSummary(place: Pick<Place, "reviewCount" | "averageRevisitScore">) {
+  const reviewCount = place.reviewCount ?? 0;
+
+  return {
+    reviewLabel: `리뷰 ${reviewCount}`,
+    ratingLabel:
+      reviewCount > 0 && Number.isFinite(place.averageRevisitScore)
+        ? `★ ${((place.averageRevisitScore ?? 0) * 5).toFixed(1)}`
+        : "평점 준비중",
+  };
+}
+
+export function shouldApplyProgrammaticMapFocus(nextFocusKey: number, lastAppliedFocusKey: number) {
+  return nextFocusKey > 0 && nextFocusKey > lastAppliedFocusKey;
 }
 
 function getFallbackMapBounds(places: Place[]) {

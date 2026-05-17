@@ -18,6 +18,7 @@
     "format:check": "prettier . --check",
     "lint-staged": "lint-staged",
     "check:branch": "node scripts/validate-branch-name.mjs",
+    "check:push": "node scripts/prevent-main-push.mjs",
     "commitlint": "commitlint --edit",
     "prepare": "husky"
   },

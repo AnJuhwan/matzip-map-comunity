@@ -10,6 +10,7 @@ create table if not exists public.anonymous_profiles (
 create table if not exists public.places (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) on delete cascade,
+  naver_place_key text,
   name text not null check (char_length(name) between 1 and 80),
   address text not null check (char_length(address) between 1 and 180),
   latitude double precision not null,
@@ -17,6 +18,7 @@ create table if not exists public.places (
   category_id text not null,
   tag_ids text[] not null default '{}',
   hero_image_url text,
+  photo_urls text[] not null default '{}',
   status text not null default 'public' check (status in ('public', 'hidden', 'deleted')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -50,6 +52,9 @@ create table if not exists public.reports (
 
 create index if not exists places_status_created_idx on public.places(status, created_at desc);
 create index if not exists places_location_idx on public.places(latitude, longitude);
+create unique index if not exists places_naver_place_key_idx
+on public.places(naver_place_key)
+where naver_place_key is not null and status = 'public';
 create index if not exists reviews_place_status_idx on public.reviews(place_id, status, created_at desc);
 create index if not exists reports_target_idx on public.reports(target_type, target_id);
 

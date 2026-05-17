@@ -10,6 +10,12 @@ import {
   makeAnonymousNickname,
   normalizePlaceDraft,
 } from "./domain";
+import {
+  NEARBY_RADIUS_METERS,
+  getDistanceMeters,
+  type GeoBounds,
+  type UserLocation,
+} from "./location";
 import { samplePlaces, sampleReviews } from "./sample-data";
 
 export type AnonymousProfile = {
@@ -23,9 +29,16 @@ export type CommunityData = {
   reviews: Review[];
 };
 
+export type CommunityDataScope = {
+  location?: Pick<UserLocation, "latitude" | "longitude">;
+  radiusMeters?: number;
+  bounds?: GeoBounds;
+};
+
 type DbPlaceRow = {
   id: string;
   owner_id: string;
+  naver_place_key: string | null;
   name: string;
   address: string;
   latitude: number;
@@ -33,6 +46,7 @@ type DbPlaceRow = {
   category_id: Place["categoryId"];
   tag_ids: string[];
   hero_image_url: string | null;
+  photo_urls: string[] | null;
   status: ContentStatus;
   created_at: string;
 };
@@ -65,6 +79,7 @@ const photoMimeExtensions: Record<string, string> = {
 };
 
 let browserSupabase: SupabaseClient | null = null;
+let browserSupabaseConfig: { url: string; publishableKey: string } | null = null;
 let forceLocalMode = false;
 
 type LocalFallbackOptions = {
@@ -84,11 +99,18 @@ export function getBrowserSupabaseClient() {
     return null;
   }
 
-  if (!browserSupabase) {
-    browserSupabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
-    );
+  const config = {
+    url: process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    publishableKey: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+  };
+
+  if (
+    !browserSupabase ||
+    browserSupabaseConfig?.url !== config.url ||
+    browserSupabaseConfig?.publishableKey !== config.publishableKey
+  ) {
+    browserSupabase = createClient(config.url, config.publishableKey);
+    browserSupabaseConfig = config;
   }
 
   return browserSupabase;
@@ -207,25 +229,27 @@ export function isLocalFallbackEnabled(options: LocalFallbackOptions = {}) {
   return nodeEnv !== "production";
 }
 
-export async function loadCommunityData(): Promise<CommunityData> {
+export async function loadCommunityData(scope: CommunityDataScope = {}): Promise<CommunityData> {
   const supabase = getBrowserSupabaseClient();
 
   if (!supabase) {
-    return readLocalData();
+    return applyCommunityDataScope(readLocalData(), scope);
   }
 
-  const [placesResult, reviewsResult] = await Promise.all([
-    supabase
-      .from("places")
-      .select("*")
-      .eq("status", "public")
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("reviews")
-      .select("*")
-      .eq("status", "public")
-      .order("created_at", { ascending: false }),
-  ]);
+  const radiusMeters = scope.radiusMeters ?? NEARBY_RADIUS_METERS;
+  const scopeBounds =
+    scope.bounds ?? (scope.location ? getLocationBounds(scope.location, radiusMeters) : null);
+  let placesQuery = supabase.from("places").select("*").eq("status", "public");
+
+  if (scopeBounds) {
+    placesQuery = placesQuery
+      .gte("latitude", scopeBounds.south)
+      .lte("latitude", scopeBounds.north)
+      .gte("longitude", scopeBounds.west)
+      .lte("longitude", scopeBounds.east);
+  }
+
+  const placesResult = await placesQuery.order("created_at", { ascending: false });
 
   if (placesResult.error) {
     if (shouldUseLocalFallbackForStartupError(placesResult.error.message)) {
@@ -234,6 +258,24 @@ export async function loadCommunityData(): Promise<CommunityData> {
     }
 
     throw new Error(placesResult.error.message);
+  }
+
+  const scopedPlaces = placesResult.data
+    .map(mapPlaceFromRow)
+    .filter((place) => isPlaceInDataScope(place, scope, radiusMeters));
+  const placeIds = scopedPlaces.map((place) => place.id);
+  let reviewsResult;
+
+  if (scopeBounds && !placeIds.length) {
+    reviewsResult = { data: [] as DbReviewRow[], error: null };
+  } else {
+    let reviewsQuery = supabase.from("reviews").select("*").eq("status", "public");
+
+    if (scopeBounds) {
+      reviewsQuery = reviewsQuery.in("place_id", placeIds);
+    }
+
+    reviewsResult = await reviewsQuery.order("created_at", { ascending: false });
   }
 
   if (reviewsResult.error) {
@@ -245,8 +287,8 @@ export async function loadCommunityData(): Promise<CommunityData> {
     throw new Error(reviewsResult.error.message);
   }
 
-  const reviews = reviewsResult.data.map(mapReviewFromRow);
-  const places = placesResult.data.map((row) => attachPlaceStats(mapPlaceFromRow(row), reviews));
+  const reviews = (reviewsResult.data ?? []).map(mapReviewFromRow);
+  const places = scopedPlaces.map((place) => attachPlaceStats(place, reviews));
 
   return { places, reviews };
 }
@@ -267,8 +309,26 @@ export async function savePlace(input: {
   const supabase = getBrowserSupabaseClient();
 
   if (supabase) {
+    if (!input.id && normalized.naverPlaceKey) {
+      const existingResult = await supabase
+        .from("places")
+        .select("*")
+        .eq("naver_place_key", normalized.naverPlaceKey)
+        .eq("status", "public")
+        .maybeSingle();
+
+      if (existingResult.error) {
+        throw new Error(existingResult.error.message);
+      }
+
+      if (existingResult.data) {
+        return mapPlaceFromRow(existingResult.data);
+      }
+    }
+
     const payload = {
       owner_id: normalized.ownerAnonymousId,
+      naver_place_key: normalized.naverPlaceKey ?? null,
       name: normalized.name,
       address: normalized.address,
       latitude: normalized.latitude,
@@ -276,6 +336,7 @@ export async function savePlace(input: {
       category_id: normalized.categoryId,
       tag_ids: normalized.tagIds,
       hero_image_url: normalized.heroImageUrl ?? null,
+      photo_urls: normalized.photoUrls ?? [],
     };
     const result = input.id
       ? await supabase
@@ -299,6 +360,16 @@ export async function savePlace(input: {
   }
 
   const data = readLocalData();
+  if (!input.id && normalized.naverPlaceKey) {
+    const reusablePlace = data.places.find(
+      (place) => place.status === "public" && place.naverPlaceKey === normalized.naverPlaceKey
+    );
+
+    if (reusablePlace) {
+      return attachPlaceStats(reusablePlace, data.reviews);
+    }
+  }
+
   const existingPlace = input.id ? data.places.find((place) => place.id === input.id) : null;
   const place: Place = {
     ...normalized,
@@ -475,6 +546,7 @@ function ensureLocalProfile(): AnonymousProfile {
 function activateLocalFallback() {
   forceLocalMode = true;
   browserSupabase = null;
+  browserSupabaseConfig = null;
 
   return ensureLocalProfile();
 }
@@ -500,6 +572,15 @@ function readLocalData(): CommunityData {
 
 function writeLocalData(data: CommunityData) {
   window.localStorage.setItem(localDataKey, JSON.stringify(data));
+}
+
+function applyCommunityDataScope(data: CommunityData, scope: CommunityDataScope) {
+  const radiusMeters = scope.radiusMeters ?? NEARBY_RADIUS_METERS;
+  const places = data.places.filter((place) => isPlaceInDataScope(place, scope, radiusMeters));
+  const placeIds = new Set(places.map((place) => place.id));
+  const reviews = data.reviews.filter((review) => placeIds.has(review.placeId));
+
+  return { places, reviews };
 }
 
 async function uploadPhoto(file: File, ownerId: string, scope: string) {
@@ -556,6 +637,7 @@ function fileToDataUrl(file: File) {
 function mapPlaceFromRow(row: DbPlaceRow): Place {
   return {
     id: row.id,
+    naverPlaceKey: row.naver_place_key ?? undefined,
     ownerAnonymousId: row.owner_id,
     name: row.name,
     address: row.address,
@@ -564,6 +646,7 @@ function mapPlaceFromRow(row: DbPlaceRow): Place {
     categoryId: row.category_id,
     tagIds: row.tag_ids ?? [],
     heroImageUrl: row.hero_image_url ?? undefined,
+    photoUrls: row.photo_urls ?? [],
     status: row.status,
     createdAt: row.created_at,
   };
@@ -609,8 +692,60 @@ export function attachPlaceStats(place: Place, reviews: Review[]) {
   };
 }
 
+function getLocationBounds(
+  location: Pick<UserLocation, "latitude" | "longitude">,
+  radiusMeters: number
+): GeoBounds {
+  const metersPerLatitudeDegree = 111_320;
+  const latitudeDelta = radiusMeters / metersPerLatitudeDegree;
+  const longitudeScale = Math.cos(toRadians(location.latitude));
+  const longitudeDelta =
+    Math.abs(longitudeScale) < 0.000001
+      ? 180
+      : radiusMeters / (metersPerLatitudeDegree * longitudeScale);
+
+  return {
+    south: Math.max(-90, location.latitude - latitudeDelta),
+    north: Math.min(90, location.latitude + latitudeDelta),
+    west: Math.max(-180, location.longitude - Math.abs(longitudeDelta)),
+    east: Math.min(180, location.longitude + Math.abs(longitudeDelta)),
+  };
+}
+
+function isPlaceInDataScope(place: Place, scope: CommunityDataScope, radiusMeters: number) {
+  if (scope.bounds && !isPlaceInBounds(place, scope.bounds)) {
+    return false;
+  }
+
+  if (!scope.location) {
+    return true;
+  }
+
+  return (
+    getDistanceMeters(
+      scope.location.latitude,
+      scope.location.longitude,
+      place.latitude,
+      place.longitude
+    ) <= radiusMeters
+  );
+}
+
+function isPlaceInBounds(place: Place, bounds: GeoBounds) {
+  return (
+    place.latitude >= bounds.south &&
+    place.latitude <= bounds.north &&
+    place.longitude >= bounds.west &&
+    place.longitude <= bounds.east
+  );
+}
+
 function hashToSeed(value: string) {
   return value.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
+}
+
+function toRadians(degrees: number) {
+  return (degrees * Math.PI) / 180;
 }
 
 function cryptoId() {

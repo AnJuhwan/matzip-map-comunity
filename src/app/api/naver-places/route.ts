@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
 import {
+  buildNaverPlaceImageQuery,
   buildNaverLocalSearchQueries,
   dedupeNaverPlaceCandidates,
   getCoordinatesFromNaverLocalItem,
+  getNaverImageThumbnail,
   getNaverLocalSearchCredentials,
   isNaverRateLimitMessage,
   mapNaverLocalItemToPlaceCandidate,
   sanitizeNaverText,
+  type NaverImageSearchItem,
   type NaverLocalSearchCredentials,
   type NaverLocalSearchItem,
   type NaverPlaceCandidate,
@@ -16,6 +19,11 @@ export const dynamic = "force-dynamic";
 
 type NaverLocalSearchResponse = {
   items?: NaverLocalSearchItem[];
+  errorMessage?: string;
+};
+
+type NaverImageSearchResponse = {
+  items?: NaverImageSearchItem[];
   errorMessage?: string;
 };
 
@@ -32,6 +40,7 @@ type NaverGeocodeResponse = {
 
 const MAX_IMPORT_LIMIT = 100;
 const NAVER_LOCAL_DISPLAY_LIMIT = 5;
+const NAVER_IMAGE_DISPLAY_LIMIT = 1;
 const NAVER_LOCAL_REQUEST_DELAY_MS = 180;
 
 export async function GET(request: Request) {
@@ -83,7 +92,10 @@ export async function GET(request: Request) {
             return null;
           }
 
-          return mapNaverLocalItemToPlaceCandidate(item, query, coordinates);
+          const candidate = mapNaverLocalItemToPlaceCandidate(item, query, coordinates);
+          const heroImageUrl = await searchNaverPlaceThumbnail(candidate, searchCredentials);
+
+          return heroImageUrl ? { ...candidate, heroImageUrl } : candidate;
         })
       );
 
@@ -150,6 +162,36 @@ async function searchNaverPlaces(query: string, credentials: NaverLocalSearchCre
   }
 
   return body.items ?? [];
+}
+
+async function searchNaverPlaceThumbnail(
+  candidate: NaverPlaceCandidate,
+  credentials: NaverLocalSearchCredentials
+) {
+  try {
+    const response = await fetch(
+      `https://openapi.naver.com/v1/search/image?query=${encodeURIComponent(
+        buildNaverPlaceImageQuery(candidate)
+      )}&display=${NAVER_IMAGE_DISPLAY_LIMIT}&sort=sim&filter=medium`,
+      {
+        headers: {
+          "X-Naver-Client-Id": credentials.clientId,
+          "X-Naver-Client-Secret": credentials.clientSecret,
+        },
+        cache: "no-store",
+      }
+    );
+
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const body = (await response.json()) as NaverImageSearchResponse;
+
+    return getNaverImageThumbnail(body.items ?? []);
+  } catch {
+    return undefined;
+  }
 }
 
 async function geocodeAddress(address: string, credentials: { keyId: string; secret: string }) {

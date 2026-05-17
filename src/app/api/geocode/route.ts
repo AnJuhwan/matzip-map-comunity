@@ -1,4 +1,11 @@
 import { NextResponse } from "next/server";
+import {
+  getCoordinatesFromNaverLocalItem,
+  getNaverLocalSearchCredentials,
+  sanitizeNaverText,
+  type NaverLocalSearchCredentials,
+  type NaverLocalSearchItem,
+} from "@/features/naver-place-import";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +20,11 @@ type NaverGeocodeResponse = {
   errorMessage?: string;
 };
 
+type NaverLocalSearchResponse = {
+  items?: NaverLocalSearchItem[];
+  errorMessage?: string;
+};
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("query")?.trim();
@@ -23,8 +35,15 @@ export async function GET(request: Request) {
 
   const keyId = process.env.NAVER_MAP_CLIENT_ID ?? process.env.NEXT_PUBLIC_NAVER_MAP_CLIENT_ID;
   const secret = process.env.NAVER_MAP_CLIENT_SECRET;
+  const searchCredentials = getNaverLocalSearchCredentials(process.env);
 
   if (!keyId || !secret) {
+    const localSearchResult = await geocodeFromNaverLocalSearch(query, searchCredentials);
+
+    if (localSearchResult) {
+      return NextResponse.json(localSearchResult);
+    }
+
     return NextResponse.json({
       ...fallbackCoordinate(query),
       source: "fallback",
@@ -48,10 +67,22 @@ export async function GET(request: Request) {
       }
     );
   } catch {
+    const localSearchResult = await geocodeFromNaverLocalSearch(query, searchCredentials);
+
+    if (localSearchResult) {
+      return NextResponse.json(localSearchResult);
+    }
+
     return NextResponse.json({ error: "네이버 지오코딩 요청에 실패했습니다." }, { status: 502 });
   }
 
   if (!response.ok) {
+    const localSearchResult = await geocodeFromNaverLocalSearch(query, searchCredentials);
+
+    if (localSearchResult) {
+      return NextResponse.json(localSearchResult);
+    }
+
     return NextResponse.json(
       { error: "네이버 지오코딩 요청에 실패했습니다." },
       { status: response.status }
@@ -71,6 +102,12 @@ export async function GET(request: Request) {
   const first = body.addresses?.[0];
 
   if (body.status !== "OK" || !first) {
+    const localSearchResult = await geocodeFromNaverLocalSearch(query, searchCredentials);
+
+    if (localSearchResult) {
+      return NextResponse.json(localSearchResult);
+    }
+
     return NextResponse.json(
       { error: body.errorMessage ?? "주소 검색 결과가 없습니다." },
       { status: 404 }
@@ -83,6 +120,56 @@ export async function GET(request: Request) {
     longitude: Number(first.x),
     source: "naver",
   });
+}
+
+async function geocodeFromNaverLocalSearch(
+  query: string,
+  credentials: NaverLocalSearchCredentials | null
+) {
+  if (!credentials) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(
+      `https://openapi.naver.com/v1/search/local.json?query=${encodeURIComponent(
+        query
+      )}&display=1&sort=random`,
+      {
+        headers: {
+          "X-Naver-Client-Id": credentials.clientId,
+          "X-Naver-Client-Secret": credentials.clientSecret,
+        },
+        cache: "no-store",
+      }
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const body = (await response.json()) as NaverLocalSearchResponse;
+    const first = body.items?.[0];
+
+    if (!first) {
+      return null;
+    }
+
+    const coordinates = getCoordinatesFromNaverLocalItem(first);
+
+    if (!coordinates) {
+      return null;
+    }
+
+    return {
+      address: sanitizeNaverText(first.roadAddress || first.address || first.title || query),
+      latitude: coordinates.latitude,
+      longitude: coordinates.longitude,
+      source: "naver-local-search",
+    };
+  } catch {
+    return null;
+  }
 }
 
 function fallbackCoordinate(query: string) {
