@@ -1,5 +1,8 @@
 # PR 컨벤션
 
+자동 PR 리뷰의 관점, 코드 링크, inline comment 기준은
+[자동 PR 리뷰 하네스](pr-automated-review-harness.md)를 따른다.
+
 이 프로젝트의 Pull Request는 항상 한국어로 작성한다. PR은 코드 변경의 의도와 검증 결과를 사람이 빠르게 판단하는 문서이므로, 팀의 기본 업무 언어에 맞춰 한국어를 우선한다.
 
 ## 언어
