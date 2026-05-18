@@ -67,7 +67,11 @@ type NaverMaps = {
   Map: new (element: HTMLElement, options: { center: NaverLatLng; zoom: number }) => NaverMap;
   Marker: new (options: NaverMarkerOptions) => NaverMarker;
   Event: {
-    addListener(target: object, eventName: string, listener: () => void): NaverMapEventListener;
+    addListener(
+      target: object,
+      eventName: string,
+      listener: () => void
+    ): NaverMapEventListener | null | undefined;
     removeListener(listener: NaverMapEventListener | NaverMapEventListener[]): void;
   };
   Service?: {
@@ -287,7 +291,7 @@ export function NaverMap({
     return () => {
       cancelled = true;
       boundsReportIdRef.current += 1;
-      naverMaps.Event.removeListener(listener);
+      removeNaverMapEventListener(naverMaps, listener);
     };
   }, [mapLoadState, onVisibleBoundsChange]);
 
@@ -337,7 +341,7 @@ export function NaverMap({
       return;
     }
 
-    userMarkerRef.current?.setMap(null);
+    clearNaverMapMarker(userMarkerRef.current);
     userMarkerRef.current = new naverMaps.Marker({
       position: new naverMaps.LatLng(userLocation.latitude, userLocation.longitude),
       map,
@@ -350,7 +354,7 @@ export function NaverMap({
     });
 
     return () => {
-      userMarkerRef.current?.setMap(null);
+      clearNaverMapMarker(userMarkerRef.current);
       userMarkerRef.current = null;
     };
   }, [mapLoadState, userLocation]);
@@ -632,6 +636,29 @@ function getAreaQueryFromNaverReverseGeocodeResponse(response?: NaverReverseGeoc
   return [region?.area3?.name, region?.area4?.name, region?.area2?.name, region?.area1?.name]
     .map((areaName) => areaName?.trim())
     .find((areaName): areaName is string => Boolean(areaName));
+}
+
+function removeNaverMapEventListener(
+  naverMaps: NaverMaps,
+  listener: NaverMapEventListener | null | undefined
+) {
+  if (!listener) {
+    return;
+  }
+
+  try {
+    naverMaps.Event.removeListener(listener);
+  } catch {
+    // The Naver SDK can throw while tearing down listeners after auth or script failures.
+  }
+}
+
+function clearNaverMapMarker(marker: NaverMarker | null) {
+  if (!marker) {
+    return;
+  }
+
+  clearNaverMapMarkers([marker]);
 }
 
 function buildNaverRestaurantMarkerContent({

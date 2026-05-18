@@ -13,8 +13,8 @@ import {
   DEFAULT_USER_LOCATION,
   attachPlaceStats,
   ensureAnonymousProfile,
+  findDuplicatePlaces,
   getVisiblePlaces,
-  isSupabaseConfigured,
   loadCommunityData,
   makeAnonymousNickname,
   reportContent,
@@ -55,6 +55,10 @@ export function getGeoBoundsCenter(bounds: GeoBounds) {
     latitude: (bounds.south + bounds.north) / 2,
     longitude: (bounds.west + bounds.east) / 2,
   };
+}
+
+export function filterUnsavedCandidates(candidates: NearbyPlaceCandidate[], savedPlaces: Place[]) {
+  return candidates.filter((candidate) => findDuplicatePlaces(candidate, savedPlaces).length === 0);
 }
 
 export function useMatzipCommunity(initialSearchQuery = "") {
@@ -327,6 +331,34 @@ export function useMatzipCommunity(initialSearchQuery = "") {
     []
   );
 
+  useEffect(() => {
+    if (locationStatus !== "ready" && locationStatus !== "fallback") {
+      return;
+    }
+
+    if (visibleMapBoundsRef.current || normalizeSearchInput(appliedQuery)) {
+      return;
+    }
+
+    const nextMapFocusLocation = mapFocusLocationRef.current;
+    const bounds = getCenteredGeoBounds(nextMapFocusLocation);
+    const boundsKey = getBoundsKey(bounds);
+
+    if (boundsKey === visibleMapBoundsKeyRef.current) {
+      return;
+    }
+
+    visibleMapBoundsKeyRef.current = boundsKey;
+    visibleMapAreaQueryRef.current = "";
+    visibleMapBoundsRef.current = bounds;
+    setVisibleMapBounds(bounds);
+    refreshData({ bounds }).catch((error) => {
+      setMessage(error instanceof Error ? error.message : "지도 화면 맛집을 가져오지 못했습니다.");
+    });
+
+    void loadNearbyCandidates("", undefined, nextMapFocusLocation, bounds);
+  }, [appliedQuery, loadNearbyCandidates, locationStatus, refreshData]);
+
   const visibleReviews = useMemo(
     () => reviews.filter((review) => review.status === "public"),
     [reviews]
@@ -349,17 +381,21 @@ export function useMatzipCommunity(initialSearchQuery = "") {
       return categoryMatch;
     });
   }, [activeCategoryId, mapScopedPlaces]);
+  const uniqueNearbyCandidates = useMemo(
+    () => filterUnsavedCandidates(nearbyCandidates, visiblePlaces),
+    [nearbyCandidates, visiblePlaces]
+  );
   const filteredCandidates = useMemo(() => {
     const normalizedQuery = appliedQuery.trim().toLowerCase();
 
-    return nearbyCandidates.filter((candidate) => {
+    return uniqueNearbyCandidates.filter((candidate) => {
       const categoryMatch = activeCategoryId === "all" || candidate.categoryId === activeCategoryId;
       const queryMatch = matchesSearch(candidate, normalizedQuery);
       const boundsMatch = !visibleMapBounds || isPointInBounds(candidate, visibleMapBounds);
 
       return categoryMatch && queryMatch && boundsMatch;
     });
-  }, [activeCategoryId, appliedQuery, nearbyCandidates, visibleMapBounds]);
+  }, [activeCategoryId, appliedQuery, uniqueNearbyCandidates, visibleMapBounds]);
   const candidateMapPlaces = useMemo(
     () => filteredCandidates.map(mapCandidateToPlace),
     [filteredCandidates]
@@ -689,7 +725,6 @@ export function useMatzipCommunity(initialSearchQuery = "") {
     mapPlaces,
     selectedPlace,
     selectedReviews,
-    isSupabaseReady: isSupabaseConfigured(),
     handleRequestUserLocation,
     handleVisibleBoundsChange,
     handleSearchSubmit,

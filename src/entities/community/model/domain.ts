@@ -109,7 +109,7 @@ export function normalizePlaceDraft(draft: PlaceDraft): Omit<Place, "id"> {
 }
 
 export function findDuplicatePlaces(
-  draft: Pick<PlaceDraft, "name" | "address" | "latitude" | "longitude">,
+  draft: Pick<PlaceDraft, "name" | "address" | "latitude" | "longitude" | "naverPlaceKey">,
   places: Place[]
 ) {
   const draftName = compactText(draft.name);
@@ -120,13 +120,16 @@ export function findDuplicatePlaces(
       return false;
     }
 
+    const sameNaverPlace = Boolean(
+      draft.naverPlaceKey && place.naverPlaceKey && draft.naverPlaceKey === place.naverPlaceKey
+    );
     const sameAddress = normalizeAddress(place.address) === draftAddress;
     const nearby =
       distanceInMeters(draft.latitude, draft.longitude, place.latitude, place.longitude) <= 80;
     const similarName =
       compactText(place.name).includes(draftName) || draftName.includes(compactText(place.name));
 
-    return sameAddress || (nearby && similarName);
+    return sameNaverPlace || sameAddress || (nearby && similarName);
   });
 }
 

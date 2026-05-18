@@ -1,8 +1,9 @@
 "use client";
 
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft, RefreshCw, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   type AnonymousProfile,
   type Place,
@@ -28,6 +29,7 @@ export function SavedPlaceDetailPage({ placeId }: { placeId: string }) {
   const [places, setPlaces] = useState<Place[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [editingReview, setEditingReview] = useState<Review | null>(null);
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
   const [isEditingPlace, setIsEditingPlace] = useState(false);
   const [isBooting, setIsBooting] = useState(true);
   const [message, setMessage] = useState("");
@@ -115,8 +117,23 @@ export function SavedPlaceDetailPage({ placeId }: { placeId: string }) {
       ...input,
       activeAnonymousId: profile.id,
     });
-    setEditingReview(null);
     await refreshData();
+    handleCloseReviewModal();
+  }
+
+  function handleOpenNewReviewModal() {
+    setEditingReview(null);
+    setIsReviewModalOpen(true);
+  }
+
+  function handleOpenEditReviewModal(review: Review) {
+    setEditingReview(review);
+    setIsReviewModalOpen(true);
+  }
+
+  function handleCloseReviewModal() {
+    setIsReviewModalOpen(false);
+    setEditingReview(null);
   }
 
   async function handleDelete(type: "place" | "review", id: string) {
@@ -194,20 +211,25 @@ export function SavedPlaceDetailPage({ placeId }: { placeId: string }) {
             onEditPlace={() => setIsEditingPlace(true)}
             onDeletePlace={() => handleDelete("place", place.id)}
             onReportPlace={() => handleReport("place", place.id)}
-            onEditReview={setEditingReview}
+            onWriteReview={handleOpenNewReviewModal}
+            onEditReview={handleOpenEditReviewModal}
             onDeleteReview={(reviewId) => handleDelete("review", reviewId)}
             onReportReview={(reviewId) => handleReport("review", reviewId)}
           />
-          <ReviewCard>
+          <ReviewModal
+            isOpen={isReviewModalOpen}
+            title={editingReview ? "리뷰 수정" : "리뷰 쓰기"}
+            onClose={handleCloseReviewModal}
+          >
             <ReviewForm
-              key={editingReview?.id ?? place.id}
+              key={editingReview?.id ?? `new-${place.id}`}
               placeId={place.id}
               profile={profile}
               editingReview={editingReview}
-              onCancelEdit={() => setEditingReview(null)}
+              onCancelEdit={handleCloseReviewModal}
               onSave={handleSaveReview}
             />
-          </ReviewCard>
+          </ReviewModal>
         </>
       )}
     </DetailPageFrame>
@@ -217,6 +239,7 @@ export function SavedPlaceDetailPage({ placeId }: { placeId: string }) {
 export function CandidatePlaceDetailPage({ candidate }: { candidate: NaverPlaceCandidate | null }) {
   const router = useRouter();
   const [profile, setProfile] = useState<AnonymousProfile | null>(null);
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
   const [isBooting, setIsBooting] = useState(true);
   const [message, setMessage] = useState("");
 
@@ -327,13 +350,18 @@ export function CandidatePlaceDetailPage({ candidate }: { candidate: NaverPlaceC
         onEditPlace={() => undefined}
         onDeletePlace={() => undefined}
         onReportPlace={() => window.alert("저장 전 네이버 후보입니다.")}
+        onWriteReview={() => setIsReviewModalOpen(true)}
         onEditReview={() => undefined}
         onDeleteReview={() => undefined}
         onReportReview={() => undefined}
       />
-      <ReviewCard>
+      <ReviewModal
+        isOpen={isReviewModalOpen}
+        title="리뷰 쓰기"
+        onClose={() => setIsReviewModalOpen(false)}
+      >
         <ReviewForm placeId="candidate" profile={profile} onSave={handleSaveCandidateReview} />
-      </ReviewCard>
+      </ReviewModal>
     </DetailPageFrame>
   );
 }
@@ -358,10 +386,6 @@ function DetailPageFrame({ children }: { children: ReactNode }) {
   );
 }
 
-function ReviewCard({ children }: { children: ReactNode }) {
-  return <div className="rounded-md border border-[#d9e4dd] bg-white p-4">{children}</div>;
-}
-
 function DetailShell({ message }: { message: string }) {
   return (
     <main className="grid min-h-screen place-items-center bg-[#f6faf7] p-6 text-[#17352b]">
@@ -371,4 +395,117 @@ function DetailShell({ message }: { message: string }) {
       </div>
     </main>
   );
+}
+
+function ReviewModal({
+  isOpen,
+  title,
+  onClose,
+  children,
+}: {
+  isOpen: boolean;
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  useLockedBodyScroll(isOpen);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, onClose]);
+
+  if (!isMounted || !isOpen) {
+    return null;
+  }
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-end bg-[#10231dcc] px-3 py-3 sm:items-center sm:justify-center sm:px-6"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="review-modal-title"
+        className="flex max-h-[calc(100vh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-md border border-[#d9e4dd] bg-white shadow-xl sm:max-h-[min(88vh,760px)]"
+      >
+        <header className="flex items-center justify-between gap-3 border-b border-[#edf3ef] px-4 py-3">
+          <h2 id="review-modal-title" className="text-lg font-black text-[#17352b]">
+            {title}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid h-9 w-9 place-items-center rounded-md border border-[#d9e4dd] bg-white text-[#17352b] hover:border-[#0f7a5f]"
+            aria-label="리뷰 작성 닫기"
+          >
+            <X size={16} />
+          </button>
+        </header>
+        <div className="overflow-y-auto overscroll-contain p-4">{children}</div>
+      </section>
+    </div>,
+    document.body
+  );
+}
+
+function useLockedBodyScroll(isLocked: boolean) {
+  useEffect(() => {
+    if (!isLocked) {
+      return;
+    }
+
+    const scrollY = window.scrollY;
+    const { style } = document.body;
+    const previousStyle = {
+      position: style.position,
+      top: style.top,
+      left: style.left,
+      right: style.right,
+      width: style.width,
+      overflow: style.overflow,
+    };
+
+    style.position = "fixed";
+    style.top = `-${scrollY}px`;
+    style.left = "0";
+    style.right = "0";
+    style.width = "100%";
+    style.overflow = "hidden";
+
+    return () => {
+      style.position = previousStyle.position;
+      style.top = previousStyle.top;
+      style.left = previousStyle.left;
+      style.right = previousStyle.right;
+      style.width = previousStyle.width;
+      style.overflow = previousStyle.overflow;
+      window.scrollTo(0, scrollY);
+    };
+  }, [isLocked]);
 }

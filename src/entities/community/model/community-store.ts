@@ -6,7 +6,6 @@ import {
   type Place,
   type PlaceDraft,
   type Review,
-  canMutateContent,
   makeAnonymousNickname,
   normalizePlaceDraft,
 } from "./domain";
@@ -16,12 +15,11 @@ import {
   type GeoBounds,
   type UserLocation,
 } from "./location";
-import { samplePlaces, sampleReviews } from "./sample-data";
 
 export type AnonymousProfile = {
   id: string;
   nickname: string;
-  backend: "supabase" | "local";
+  backend: "supabase";
 };
 
 export type CommunityData = {
@@ -66,8 +64,26 @@ type DbReviewRow = {
   created_at: string;
 };
 
-const localProfileKey = "matzip.profile.v1";
-const localDataKey = "matzip.community.v1";
+type SupabaseErrorLike = {
+  message?: string;
+};
+
+type PlaceMutationPayload = {
+  owner_id: string;
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  category_id: Place["categoryId"];
+  tag_ids: string[];
+  hero_image_url: string | null;
+  photo_urls?: string[];
+  naver_place_key?: string | null;
+  status?: ContentStatus;
+};
+
+const SUPABASE_REQUIRED_MESSAGE =
+  "Supabase 설정이 필요합니다. 사용자 데이터는 브라우저 저장소에 저장하지 않습니다.";
 export const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 
 const allowedPhotoMimeTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
@@ -80,17 +96,10 @@ const photoMimeExtensions: Record<string, string> = {
 
 let browserSupabase: SupabaseClient | null = null;
 let browserSupabaseConfig: { url: string; publishableKey: string } | null = null;
-let forceLocalMode = false;
-
-type LocalFallbackOptions = {
-  nodeEnv?: string;
-};
 
 export function isSupabaseConfigured() {
   return Boolean(
-    !forceLocalMode &&
-    process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+    process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
   );
 }
 
@@ -109,7 +118,13 @@ export function getBrowserSupabaseClient() {
     browserSupabaseConfig?.url !== config.url ||
     browserSupabaseConfig?.publishableKey !== config.publishableKey
   ) {
-    browserSupabase = createClient(config.url, config.publishableKey);
+    browserSupabase = createClient(config.url, config.publishableKey, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+    });
     browserSupabaseConfig = config;
   }
 
@@ -120,7 +135,7 @@ export async function ensureAnonymousProfile(): Promise<AnonymousProfile> {
   const supabase = getBrowserSupabaseClient();
 
   if (!supabase) {
-    return ensureLocalProfile();
+    throw new Error(SUPABASE_REQUIRED_MESSAGE);
   }
 
   const sessionResult = await supabase.auth.getSession();
@@ -130,10 +145,6 @@ export async function ensureAnonymousProfile(): Promise<AnonymousProfile> {
     const signInResult = await supabase.auth.signInAnonymously();
 
     if (signInResult.error || !signInResult.data.user) {
-      if (shouldUseLocalFallbackForStartupError(signInResult.error?.message ?? "")) {
-        return activateLocalFallback();
-      }
-
       throw new Error(signInResult.error?.message ?? "익명 세션을 만들지 못했습니다.");
     }
 
@@ -147,10 +158,6 @@ export async function ensureAnonymousProfile(): Promise<AnonymousProfile> {
     .maybeSingle();
 
   if (profileResult.error) {
-    if (shouldUseLocalFallbackForStartupError(profileResult.error.message)) {
-      return activateLocalFallback();
-    }
-
     throw new Error(profileResult.error.message);
   }
 
@@ -170,10 +177,6 @@ export async function ensureAnonymousProfile(): Promise<AnonymousProfile> {
     .single();
 
   if (insertResult.error) {
-    if (shouldUseLocalFallbackForStartupError(insertResult.error.message)) {
-      return activateLocalFallback();
-    }
-
     throw new Error(insertResult.error.message);
   }
 
@@ -186,54 +189,46 @@ export async function ensureAnonymousProfile(): Promise<AnonymousProfile> {
 
 export async function updateNickname(profile: AnonymousProfile, nickname: string) {
   const nextNickname = nickname.trim() || makeAnonymousNickname();
+  const supabase = getBrowserSupabaseClient();
 
-  if (profile.backend === "supabase") {
-    const supabase = getBrowserSupabaseClient();
-    const result = await supabase
-      ?.from("anonymous_profiles")
-      .update({ nickname: nextNickname })
-      .eq("id", profile.id);
+  if (!supabase) {
+    throw new Error(SUPABASE_REQUIRED_MESSAGE);
+  }
 
-    if (result?.error) {
-      throw new Error(result.error.message);
-    }
-  } else {
-    saveLocalProfile({ ...profile, nickname: nextNickname });
+  const result = await supabase
+    .from("anonymous_profiles")
+    .update({ nickname: nextNickname })
+    .eq("id", profile.id);
+
+  if (result.error) {
+    throw new Error(result.error.message);
   }
 
   return { ...profile, nickname: nextNickname };
 }
 
-export function shouldUseLocalFallbackForStartupError(
-  message: string,
-  options: LocalFallbackOptions = {}
-) {
-  if (!isLocalFallbackEnabled(options)) {
-    return false;
-  }
-
-  const normalized = message.toLowerCase();
-
-  return (
-    normalized.includes("anonymous sign-ins are disabled") ||
-    normalized.includes("anonymous provider is disabled") ||
-    normalized.includes("anonymous signups are disabled") ||
-    (normalized.includes("relation") && normalized.includes("does not exist")) ||
-    (normalized.includes("schema cache") && normalized.includes("not find"))
-  );
+function isMissingNaverPlaceKeyColumnError(error: SupabaseErrorLike | null | undefined) {
+  return isMissingPlaceColumnError(error, "naver_place_key");
 }
 
-export function isLocalFallbackEnabled(options: LocalFallbackOptions = {}) {
-  const nodeEnv = options.nodeEnv ?? process.env.NODE_ENV;
+function isMissingPlaceColumnError(
+  error: SupabaseErrorLike | null | undefined,
+  columnName: string
+) {
+  const message = error?.message?.toLowerCase() ?? "";
 
-  return nodeEnv !== "production";
+  return (
+    (message.includes(`places.${columnName}`) ||
+      (message.includes(columnName) && message.includes("places"))) &&
+    (message.includes("does not exist") || message.includes("schema cache"))
+  );
 }
 
 export async function loadCommunityData(scope: CommunityDataScope = {}): Promise<CommunityData> {
   const supabase = getBrowserSupabaseClient();
 
   if (!supabase) {
-    return applyCommunityDataScope(readLocalData(), scope);
+    throw new Error(SUPABASE_REQUIRED_MESSAGE);
   }
 
   const radiusMeters = scope.radiusMeters ?? NEARBY_RADIUS_METERS;
@@ -252,11 +247,6 @@ export async function loadCommunityData(scope: CommunityDataScope = {}): Promise
   const placesResult = await placesQuery.order("created_at", { ascending: false });
 
   if (placesResult.error) {
-    if (shouldUseLocalFallbackForStartupError(placesResult.error.message)) {
-      forceLocalMode = true;
-      return readLocalData();
-    }
-
     throw new Error(placesResult.error.message);
   }
 
@@ -279,11 +269,6 @@ export async function loadCommunityData(scope: CommunityDataScope = {}): Promise
   }
 
   if (reviewsResult.error) {
-    if (shouldUseLocalFallbackForStartupError(reviewsResult.error.message)) {
-      forceLocalMode = true;
-      return readLocalData();
-    }
-
     throw new Error(reviewsResult.error.message);
   }
 
@@ -308,37 +293,54 @@ export async function savePlace(input: {
   });
   const supabase = getBrowserSupabaseClient();
 
-  if (supabase) {
-    if (!input.id && normalized.naverPlaceKey) {
-      const existingResult = await supabase
-        .from("places")
-        .select("*")
-        .eq("naver_place_key", normalized.naverPlaceKey)
-        .eq("status", "public")
-        .maybeSingle();
+  if (!supabase) {
+    throw new Error(SUPABASE_REQUIRED_MESSAGE);
+  }
 
-      if (existingResult.error) {
+  let canUseNaverPlaceKey = Boolean(normalized.naverPlaceKey);
+  let canUsePhotoUrls = true;
+
+  if (!input.id && normalized.naverPlaceKey) {
+    const existingResult = await supabase
+      .from("places")
+      .select("*")
+      .eq("naver_place_key", normalized.naverPlaceKey)
+      .eq("status", "public")
+      .maybeSingle();
+
+    if (existingResult.error) {
+      if (isMissingNaverPlaceKeyColumnError(existingResult.error)) {
+        canUseNaverPlaceKey = false;
+      } else {
         throw new Error(existingResult.error.message);
-      }
-
-      if (existingResult.data) {
-        return mapPlaceFromRow(existingResult.data);
       }
     }
 
-    const payload = {
-      owner_id: normalized.ownerAnonymousId,
-      naver_place_key: normalized.naverPlaceKey ?? null,
-      name: normalized.name,
-      address: normalized.address,
-      latitude: normalized.latitude,
-      longitude: normalized.longitude,
-      category_id: normalized.categoryId,
-      tag_ids: normalized.tagIds,
-      hero_image_url: normalized.heroImageUrl ?? null,
-      photo_urls: normalized.photoUrls ?? [],
+    if (existingResult.data) {
+      return mapPlaceFromRow(existingResult.data);
+    }
+  }
+
+  const basePayload: Omit<PlaceMutationPayload, "naver_place_key" | "photo_urls" | "status"> = {
+    owner_id: normalized.ownerAnonymousId,
+    name: normalized.name,
+    address: normalized.address,
+    latitude: normalized.latitude,
+    longitude: normalized.longitude,
+    category_id: normalized.categoryId,
+    tag_ids: normalized.tagIds,
+    hero_image_url: normalized.heroImageUrl ?? null,
+  };
+  let result = null;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const payload: PlaceMutationPayload = {
+      ...basePayload,
+      ...(canUsePhotoUrls ? { photo_urls: normalized.photoUrls ?? [] } : {}),
+      ...(canUseNaverPlaceKey ? { naver_place_key: normalized.naverPlaceKey ?? null } : {}),
     };
-    const result = input.id
+
+    result = input.id
       ? await supabase
           .from("places")
           .update(payload)
@@ -352,37 +354,31 @@ export async function savePlace(input: {
           .select("*")
           .single();
 
-    if (result.error) {
-      throw new Error(result.error.message);
+    if (!result.error) {
+      break;
     }
 
-    return mapPlaceFromRow(result.data);
-  }
+    const nextCanUseNaverPlaceKey: boolean =
+      canUseNaverPlaceKey && !isMissingPlaceColumnError(result.error, "naver_place_key");
+    const nextCanUsePhotoUrls: boolean =
+      canUsePhotoUrls && !isMissingPlaceColumnError(result.error, "photo_urls");
 
-  const data = readLocalData();
-  if (!input.id && normalized.naverPlaceKey) {
-    const reusablePlace = data.places.find(
-      (place) => place.status === "public" && place.naverPlaceKey === normalized.naverPlaceKey
-    );
-
-    if (reusablePlace) {
-      return attachPlaceStats(reusablePlace, data.reviews);
+    if (
+      nextCanUseNaverPlaceKey === canUseNaverPlaceKey &&
+      nextCanUsePhotoUrls === canUsePhotoUrls
+    ) {
+      break;
     }
+
+    canUseNaverPlaceKey = nextCanUseNaverPlaceKey;
+    canUsePhotoUrls = nextCanUsePhotoUrls;
   }
 
-  const existingPlace = input.id ? data.places.find((place) => place.id === input.id) : null;
-  const place: Place = {
-    ...normalized,
-    id: input.id ?? cryptoId(),
-    status: existingPlace?.status ?? normalized.status,
-    createdAt: existingPlace?.createdAt ?? new Date().toISOString(),
-  };
-  const places = input.id
-    ? data.places.map((item) => (item.id === input.id ? place : item))
-    : [place, ...data.places];
+  if (result?.error) {
+    throw new Error(result.error.message);
+  }
 
-  writeLocalData({ ...data, places });
-  return attachPlaceStats(place, data.reviews);
+  return mapPlaceFromRow(result!.data);
 }
 
 export async function saveReview(input: {
@@ -396,64 +392,40 @@ export async function saveReview(input: {
     : input.review.imageUrl;
   const supabase = getBrowserSupabaseClient();
 
-  if (supabase) {
-    const payload = {
-      place_id: input.review.placeId,
-      owner_id: input.review.ownerAnonymousId,
-      nickname: input.review.nickname.trim(),
-      price_range: input.review.priceRange,
-      recommended_menu: input.review.recommendedMenu.trim(),
-      good_point: input.review.goodPoint.trim(),
-      bad_point: input.review.badPoint.trim(),
-      revisit_intent: input.review.revisitIntent,
-      image_url: imageUrl ?? null,
-    };
-    const result = input.id
-      ? await supabase
-          .from("reviews")
-          .update(payload)
-          .eq("id", input.id)
-          .eq("owner_id", input.activeAnonymousId)
-          .select("*")
-          .single()
-      : await supabase
-          .from("reviews")
-          .insert({ ...payload, status: "public" })
-          .select("*")
-          .single();
-
-    if (result.error) {
-      throw new Error(result.error.message);
-    }
-
-    return mapReviewFromRow(result.data);
+  if (!supabase) {
+    throw new Error(SUPABASE_REQUIRED_MESSAGE);
   }
 
-  const data = readLocalData();
-  const targetPlace = data.places.find((place) => place.id === input.review.placeId);
-
-  if (!targetPlace || targetPlace.status !== "public") {
-    throw new Error("공개된 맛집에만 리뷰를 작성할 수 있습니다.");
-  }
-
-  const existingReview = input.id ? data.reviews.find((review) => review.id === input.id) : null;
-  const review: Review = {
-    ...input.review,
-    id: input.id ?? cryptoId(),
+  const payload = {
+    place_id: input.review.placeId,
+    owner_id: input.review.ownerAnonymousId,
     nickname: input.review.nickname.trim(),
-    recommendedMenu: input.review.recommendedMenu.trim(),
-    goodPoint: input.review.goodPoint.trim(),
-    badPoint: input.review.badPoint.trim(),
-    imageUrl,
-    status: existingReview?.status ?? "public",
-    createdAt: existingReview?.createdAt ?? new Date().toISOString(),
+    price_range: input.review.priceRange,
+    recommended_menu: input.review.recommendedMenu.trim(),
+    good_point: input.review.goodPoint.trim(),
+    bad_point: input.review.badPoint.trim(),
+    revisit_intent: input.review.revisitIntent,
+    image_url: imageUrl ?? null,
   };
-  const reviews = input.id
-    ? data.reviews.map((item) => (item.id === input.id ? review : item))
-    : [review, ...data.reviews];
+  const result = input.id
+    ? await supabase
+        .from("reviews")
+        .update(payload)
+        .eq("id", input.id)
+        .eq("owner_id", input.activeAnonymousId)
+        .select("*")
+        .single()
+    : await supabase
+        .from("reviews")
+        .insert({ ...payload, status: "public" })
+        .select("*")
+        .single();
 
-  writeLocalData({ ...data, reviews });
-  return review;
+  if (result.error) {
+    throw new Error(result.error.message);
+  }
+
+  return mapReviewFromRow(result.data);
 }
 
 export async function softDeleteContent(input: {
@@ -463,40 +435,19 @@ export async function softDeleteContent(input: {
 }) {
   const supabase = getBrowserSupabaseClient();
 
-  if (supabase) {
-    const table = input.type === "place" ? "places" : "reviews";
-    const result = await supabase
-      .from(table)
-      .update({ status: "deleted" })
-      .eq("id", input.id)
-      .eq("owner_id", input.activeAnonymousId);
-
-    if (result.error) {
-      throw new Error(result.error.message);
-    }
-
-    return;
+  if (!supabase) {
+    throw new Error(SUPABASE_REQUIRED_MESSAGE);
   }
 
-  const data = readLocalData();
-  if (input.type === "place") {
-    writeLocalData({
-      ...data,
-      places: data.places.map((place) =>
-        place.id === input.id && canMutateContent(input.activeAnonymousId, place)
-          ? { ...place, status: "deleted" }
-          : place
-      ),
-    });
-  } else {
-    writeLocalData({
-      ...data,
-      reviews: data.reviews.map((review) =>
-        review.id === input.id && canMutateContent(input.activeAnonymousId, review)
-          ? { ...review, status: "deleted" }
-          : review
-      ),
-    });
+  const table = input.type === "place" ? "places" : "reviews";
+  const result = await supabase
+    .from(table)
+    .update({ status: "deleted" })
+    .eq("id", input.id)
+    .eq("owner_id", input.activeAnonymousId);
+
+  if (result.error) {
+    throw new Error(result.error.message);
   }
 }
 
@@ -508,79 +459,21 @@ export async function reportContent(input: {
 }) {
   const supabase = getBrowserSupabaseClient();
 
-  if (supabase) {
-    const result = await supabase.from("reports").insert({
-      target_type: input.targetType,
-      target_id: input.targetId,
-      reporter_id: input.reporterAnonymousId,
-      reason: input.reason,
-      status: "open",
-    });
-
-    if (result.error) {
-      throw new Error(result.error.message);
-    }
-  }
-}
-
-function ensureLocalProfile(): AnonymousProfile {
-  ensureLocalFallbackAllowed();
-
-  const stored = window.localStorage.getItem(localProfileKey);
-
-  if (stored) {
-    return JSON.parse(stored) as AnonymousProfile;
+  if (!supabase) {
+    throw new Error(SUPABASE_REQUIRED_MESSAGE);
   }
 
-  const id = `local-${cryptoId()}`;
-  const profile = {
-    id,
-    nickname: makeAnonymousNickname(hashToSeed(id)),
-    backend: "local" as const,
-  };
-  saveLocalProfile(profile);
+  const result = await supabase.from("reports").insert({
+    target_type: input.targetType,
+    target_id: input.targetId,
+    reporter_id: input.reporterAnonymousId,
+    reason: input.reason,
+    status: "open",
+  });
 
-  return profile;
-}
-
-function activateLocalFallback() {
-  forceLocalMode = true;
-  browserSupabase = null;
-  browserSupabaseConfig = null;
-
-  return ensureLocalProfile();
-}
-
-function saveLocalProfile(profile: AnonymousProfile) {
-  window.localStorage.setItem(localProfileKey, JSON.stringify(profile));
-}
-
-function readLocalData(): CommunityData {
-  ensureLocalFallbackAllowed();
-
-  const stored = window.localStorage.getItem(localDataKey);
-
-  if (stored) {
-    return JSON.parse(stored) as CommunityData;
+  if (result.error) {
+    throw new Error(result.error.message);
   }
-
-  const seed = { places: samplePlaces, reviews: sampleReviews };
-  writeLocalData(seed);
-
-  return seed;
-}
-
-function writeLocalData(data: CommunityData) {
-  window.localStorage.setItem(localDataKey, JSON.stringify(data));
-}
-
-function applyCommunityDataScope(data: CommunityData, scope: CommunityDataScope) {
-  const radiusMeters = scope.radiusMeters ?? NEARBY_RADIUS_METERS;
-  const places = data.places.filter((place) => isPlaceInDataScope(place, scope, radiusMeters));
-  const placeIds = new Set(places.map((place) => place.id));
-  const reviews = data.reviews.filter((review) => placeIds.has(review.placeId));
-
-  return { places, reviews };
 }
 
 async function uploadPhoto(file: File, ownerId: string, scope: string) {
@@ -589,7 +482,7 @@ async function uploadPhoto(file: File, ownerId: string, scope: string) {
   const supabase = getBrowserSupabaseClient();
 
   if (!supabase) {
-    return fileToDataUrl(file);
+    throw new Error(SUPABASE_REQUIRED_MESSAGE);
   }
 
   const extension = photoMimeExtensions[file.type] ?? "jpg";
@@ -617,21 +510,6 @@ export function validatePhotoFile(file: File) {
   if (file.size > MAX_PHOTO_BYTES) {
     throw new Error("사진은 5MB 이하만 업로드할 수 있습니다.");
   }
-}
-
-function ensureLocalFallbackAllowed() {
-  if (!isLocalFallbackEnabled()) {
-    throw new Error("운영 환경에서는 Supabase 설정 오류로 로컬 저장소를 사용할 수 없습니다.");
-  }
-}
-
-function fileToDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("사진을 읽지 못했습니다."));
-    reader.readAsDataURL(file);
-  });
 }
 
 function mapPlaceFromRow(row: DbPlaceRow): Place {
