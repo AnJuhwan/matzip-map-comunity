@@ -119,6 +119,7 @@ Supabase SQL Editor에서 `supabase/schema.sql`을 실행한 뒤 Anonymous Sign-
 - [코드 컨벤션](docs/code-conventions.md)
 - [Git 컨벤션](docs/git-conventions.md)
 - [PR 컨벤션](docs/pr-conventions.md)
+- [자동 PR 리뷰 하네스](docs/pr-automated-review-harness.md)
 
 ## 확인
 
