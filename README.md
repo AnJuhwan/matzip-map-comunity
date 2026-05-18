@@ -108,12 +108,6 @@ NAVER_IMPORT_ADMIN_TOKEN=
 
 Vercel production에는 화면 렌더링에 필요한 공개 환경변수인 `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`를 설정합니다. 네이버지도를 production에서 사용하려면 Naver Developers 콘솔에 `https://matzip-map-community.vercel.app` 도메인을 허용 등록한 뒤 `NEXT_PUBLIC_NAVER_MAP_CLIENT_ID`를 Vercel production 환경변수로 추가합니다. 주소 검색과 네이버 후보/import 이미지까지 production에서 사용하려면 서버 전용 `NAVER_MAP_CLIENT_SECRET`, `NAVER_SEARCH_CLIENT_ID`, `NAVER_SEARCH_CLIENT_SECRET`, `NAVER_IMPORT_ADMIN_TOKEN`도 Vercel 환경변수로 추가합니다.
 
-## Postman 호출
-
-Postman에서 `docs/postman/matzip-map-community.postman_collection.json`와 `docs/postman/matzip-map-community.local.postman_environment.json`을 import합니다. 로컬 서버는 `npm run dev`로 띄우고, environment의 `baseUrl`은 기본값 `http://localhost:3000`을 사용합니다.
-
-관리자 후보 조회 요청을 실행하려면 `.env.local`의 `NAVER_IMPORT_ADMIN_TOKEN` 값과 같은 값을 Postman environment의 `adminToken`에 넣습니다. collection에는 JSON body로 호출하는 `POST /api/nearby-place-candidates`, `POST /api/naver-places` 예시가 들어 있습니다.
-
 ## Supabase
 
 Supabase SQL Editor에서 `supabase/schema.sql`을 실행한 뒤 Anonymous Sign-Ins를 활성화하세요. 사진 업로드는 `place-photos` Storage bucket을 사용합니다.
@@ -121,9 +115,7 @@ Supabase SQL Editor에서 `supabase/schema.sql`을 실행한 뒤 Anonymous Sign-
 ## 문서
 
 - [제품 결정](docs/project-decisions.md)
-- [GStack 관점 리뷰](docs/mvp-gstack-review.md)
 - [운영 및 배포 체크리스트](docs/operations.md)
-- [Pre-Landing Review](docs/pre-landing-review.md)
 - [코드 컨벤션](docs/code-conventions.md)
 - [Git 컨벤션](docs/git-conventions.md)
 - [PR 컨벤션](docs/pr-conventions.md)
