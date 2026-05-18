@@ -2,8 +2,11 @@ import { createClient } from "@supabase/supabase-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_PHOTO_BYTES,
+  ensureAnonymousProfile,
+  getBrowserSupabaseClient,
   loadCommunityData,
-  shouldUseLocalFallbackForStartupError,
+  savePlace,
+  saveReview,
   validatePhotoFile,
 } from "./community-store";
 
@@ -17,23 +20,69 @@ afterEach(() => {
   delete process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 });
 
-describe("shouldUseLocalFallbackForStartupError", () => {
-  it("falls back when Supabase anonymous sign-ins are disabled", () => {
-    expect(shouldUseLocalFallbackForStartupError("Anonymous sign-ins are disabled")).toBe(true);
-  });
+describe("Supabase-only storage", () => {
+  it("creates the browser Supabase client without persisting auth in localStorage", () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "publishable-key";
 
-  it("falls back when the project schema has not been installed yet", () => {
-    expect(
-      shouldUseLocalFallbackForStartupError('relation "public.anonymous_profiles" does not exist')
-    ).toBe(true);
-  });
+    getBrowserSupabaseClient();
 
-  it("does not silently switch to local fallback in production", () => {
-    expect(
-      shouldUseLocalFallbackForStartupError("Anonymous sign-ins are disabled", {
-        nodeEnv: "production",
+    expect(createClient).toHaveBeenCalledWith(
+      "https://example.supabase.co",
+      "publishable-key",
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          persistSession: false,
+          autoRefreshToken: false,
+          detectSessionInUrl: false,
+        }),
       })
-    ).toBe(false);
+    );
+  });
+
+  it("does not create a local fallback profile when Supabase is not configured", async () => {
+    await expect(ensureAnonymousProfile()).rejects.toThrow(
+      "Supabase 설정이 필요합니다. 사용자 데이터는 브라우저 저장소에 저장하지 않습니다."
+    );
+  });
+
+  it("does not read local fallback community data when Supabase is not configured", async () => {
+    await expect(loadCommunityData()).rejects.toThrow(
+      "Supabase 설정이 필요합니다. 사용자 데이터는 브라우저 저장소에 저장하지 않습니다."
+    );
+  });
+
+  it("does not write places or reviews to localStorage when Supabase is not configured", async () => {
+    await expect(
+      savePlace({
+        activeAnonymousId: "anon-1",
+        draft: {
+          ownerAnonymousId: "anon-1",
+          name: "로컬 저장 금지",
+          address: "서울 중구 세종대로 110",
+          latitude: 37.5665,
+          longitude: 126.978,
+          categoryId: "local",
+          tagIds: [],
+        },
+      })
+    ).rejects.toThrow("Supabase 설정이 필요합니다.");
+
+    await expect(
+      saveReview({
+        activeAnonymousId: "anon-1",
+        review: {
+          placeId: "place-1",
+          ownerAnonymousId: "anon-1",
+          nickname: "테스터",
+          priceRange: "1만원 이하",
+          recommendedMenu: "김밥",
+          goodPoint: "좋아요",
+          badPoint: "없어요",
+          revisitIntent: "yes",
+        },
+      })
+    ).rejects.toThrow("Supabase 설정이 필요합니다.");
   });
 });
 
@@ -199,6 +248,101 @@ describe("loadCommunityData", () => {
   });
 });
 
+describe("savePlace", () => {
+  it("saves a Naver candidate when production is missing optional place columns", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://missing-column.example.co";
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "publishable-key";
+
+    const lookupQuery = createMaybeSingleSupabaseQuery({
+      data: null,
+      error: { message: "column places.naver_place_key does not exist" },
+    });
+    const failingInsertQuery = createMutationSupabaseQuery({
+      data: null,
+      error: {
+        message: "Could not find the 'photo_urls' column of 'places' in the schema cache",
+      },
+    });
+    const retryInsertQuery = createMutationSupabaseQuery({
+      data: createPlaceRow(),
+      error: null,
+    });
+    const client = createSequencedSupabaseClient([
+      lookupQuery,
+      failingInsertQuery,
+      retryInsertQuery,
+    ]);
+
+    vi.mocked(createClient).mockReturnValue(client as never);
+
+    const saved = await savePlace({
+      activeAnonymousId: "anon-1",
+      draft: {
+        ownerAnonymousId: "anon-1",
+        naverPlaceKey: "naver-place-1",
+        name: "네이버 후보 식당",
+        address: "서울 중구 세종대로 110",
+        latitude: 37.5665,
+        longitude: 126.978,
+        categoryId: "local",
+        tagIds: [],
+      },
+    });
+
+    expect(lookupQuery.eq).toHaveBeenCalledWith("naver_place_key", "naver-place-1");
+    expect(failingInsertQuery.insert.mock.calls[0][0]).not.toHaveProperty("naver_place_key");
+    expect(failingInsertQuery.insert.mock.calls[0][0]).toHaveProperty("photo_urls");
+    expect(retryInsertQuery.insert.mock.calls[0][0]).not.toHaveProperty("naver_place_key");
+    expect(retryInsertQuery.insert.mock.calls[0][0]).not.toHaveProperty("photo_urls");
+    expect(saved).toMatchObject({ id: "saved-place", name: "네이버 후보 식당" });
+  });
+
+  it("retries without naver_place_key if the insert discovers schema drift", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://insert-drift.example.co";
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "publishable-key";
+
+    const lookupQuery = createMaybeSingleSupabaseQuery({ data: null, error: null });
+    const failingInsertQuery = createMutationSupabaseQuery({
+      data: null,
+      error: {
+        message: "Could not find the 'naver_place_key' column of 'places' in the schema cache",
+      },
+    });
+    const retryInsertQuery = createMutationSupabaseQuery({
+      data: createPlaceRow(),
+      error: null,
+    });
+    const client = createSequencedSupabaseClient([
+      lookupQuery,
+      failingInsertQuery,
+      retryInsertQuery,
+    ]);
+
+    vi.mocked(createClient).mockReturnValue(client as never);
+
+    const saved = await savePlace({
+      activeAnonymousId: "anon-1",
+      draft: {
+        ownerAnonymousId: "anon-1",
+        naverPlaceKey: "naver-place-2",
+        name: "네이버 후보 식당",
+        address: "서울 중구 세종대로 110",
+        latitude: 37.5665,
+        longitude: 126.978,
+        categoryId: "local",
+        tagIds: [],
+      },
+    });
+
+    expect(failingInsertQuery.insert.mock.calls[0][0]).toHaveProperty(
+      "naver_place_key",
+      "naver-place-2"
+    );
+    expect(retryInsertQuery.insert.mock.calls[0][0]).not.toHaveProperty("naver_place_key");
+    expect(saved.id).toBe("saved-place");
+  });
+});
+
 describe("validatePhotoFile", () => {
   it("allows supported raster image uploads under the size limit", () => {
     const file = new File(["image"], "photo.jpg", { type: "image/jpeg" });
@@ -241,4 +385,73 @@ function createSupabaseQuery<T>(result: { data: T[]; error: null | { message: st
   };
 
   return query;
+}
+
+function createMaybeSingleSupabaseQuery<T>(result: {
+  data: T | null;
+  error: null | { message: string };
+}) {
+  const query = {
+    select: vi.fn(() => query),
+    eq: vi.fn(() => query),
+    maybeSingle: vi.fn(() => Promise.resolve(result)),
+  };
+
+  return query;
+}
+
+function createMutationSupabaseQuery<T>(result: {
+  data: T | null;
+  error: null | { message: string };
+}) {
+  const query = {
+    insert: vi.fn((payload: unknown) => {
+      void payload;
+      return query;
+    }),
+    update: vi.fn((payload: unknown) => {
+      void payload;
+      return query;
+    }),
+    eq: vi.fn(() => query),
+    select: vi.fn(() => query),
+    single: vi.fn(() => Promise.resolve(result)),
+  };
+
+  return query;
+}
+
+function createSequencedSupabaseClient(queries: unknown[]) {
+  return {
+    from: vi.fn((table: string) => {
+      if (table !== "places") {
+        throw new Error(`Unexpected table: ${table}`);
+      }
+
+      const nextQuery = queries.shift();
+
+      if (!nextQuery) {
+        throw new Error("Unexpected Supabase query");
+      }
+
+      return nextQuery;
+    }),
+  };
+}
+
+function createPlaceRow() {
+  return {
+    id: "saved-place",
+    owner_id: "anon-1",
+    name: "네이버 후보 식당",
+    address: "서울 중구 세종대로 110",
+    latitude: 37.5665,
+    longitude: 126.978,
+    category_id: "local",
+    tag_ids: [],
+    hero_image_url: null,
+    photo_urls: [],
+    status: "public",
+    created_at: "2026-05-18T00:00:00.000Z",
+  };
 }

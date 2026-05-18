@@ -76,6 +76,41 @@ describe("findDuplicatePlaces", () => {
       ).map((place) => place.id)
     ).toEqual(["p-1"]);
   });
+
+  it("returns a duplicate by Naver place key before comparing text fields", () => {
+    expect(
+      findDuplicatePlaces(
+        {
+          naverPlaceKey: "naver-place-1",
+          name: "완전히 다른 이름",
+          address: "서울 중구 세종대로 110",
+          latitude: 37.5665,
+          longitude: 126.978,
+        },
+        [
+          {
+            ...places[0],
+            naverPlaceKey: "naver-place-1",
+          },
+        ]
+      ).map((place) => place.id)
+    ).toEqual(["p-1"]);
+  });
+
+  it("falls back to address and nearby-name matching when a saved place has no Naver key", () => {
+    expect(
+      findDuplicatePlaces(
+        {
+          naverPlaceKey: "naver-place-without-db-column",
+          name: "성수분식",
+          address: "서울 성동구 성수이로 10",
+          latitude: 37.54462,
+          longitude: 127.05582,
+        },
+        places
+      ).map((place) => place.id)
+    ).toEqual(["p-1"]);
+  });
 });
 
 describe("visibility and ownership", () => {

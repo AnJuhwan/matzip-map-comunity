@@ -1,15 +1,21 @@
 // @vitest-environment jsdom
 
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { createClient } from "@supabase/supabase-js";
 import { afterEach, beforeEach, vi } from "vitest";
 import { describe, expect, it } from "vitest";
 import {
   buildNearbyCandidateRequestKey,
+  filterUnsavedCandidates,
   getGeoBoundsCenter,
   getNearbyCandidateCategoryParam,
   shouldLoadNearbyCandidates,
   useMatzipCommunity,
 } from "./use-matzip-community";
+
+vi.mock("@supabase/supabase-js", () => ({
+  createClient: vi.fn(),
+}));
 
 const browserLocation = {
   latitude: 37.5446,
@@ -22,7 +28,10 @@ const searchLocation = {
 };
 
 beforeEach(() => {
-  localStorage.clear();
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "publishable-key";
+  vi.mocked(createClient).mockReturnValue(createSupabaseClientMock() as never);
+
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = String(input);
 
@@ -72,7 +81,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  localStorage.clear();
+  delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+  delete process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 });
 
 describe("getNearbyCandidateCategoryParam", () => {
@@ -139,6 +149,58 @@ describe("buildNearbyCandidateRequestKey", () => {
   });
 });
 
+describe("filterUnsavedCandidates", () => {
+  it("removes Naver candidates that already exist as DB places", () => {
+    const candidates = [
+      {
+        tempId: "candidate-seongsu-taco",
+        naverPlaceKey: "naver-taco",
+        name: "성수 타코랩",
+        address: "서울 성동구 성수이로 100",
+        latitude: 37.5446,
+        longitude: 127.0558,
+        categoryId: "local" as const,
+        tagIds: ["local"],
+        distanceMeters: 0,
+        sourceQuery: "성수동 맛집",
+        source: "naver" as const,
+      },
+      {
+        tempId: "candidate-new-ramen",
+        naverPlaceKey: "naver-ramen",
+        name: "성수 라멘",
+        address: "서울 성동구 성수이로 200",
+        latitude: 37.546,
+        longitude: 127.057,
+        categoryId: "local" as const,
+        tagIds: ["local"],
+        distanceMeters: 120,
+        sourceQuery: "성수동 맛집",
+        source: "naver" as const,
+      },
+    ];
+
+    const savedPlaces = [
+      {
+        id: "saved-seongsu-taco",
+        naverPlaceKey: "naver-taco",
+        name: "성수 타코랩",
+        address: "서울 성동구 성수이로 100",
+        latitude: 37.5446,
+        longitude: 127.0558,
+        categoryId: "local" as const,
+        tagIds: ["local"],
+        ownerAnonymousId: "anon-1",
+        status: "public" as const,
+      },
+    ];
+
+    expect(
+      filterUnsavedCandidates(candidates, savedPlaces).map((candidate) => candidate.name)
+    ).toEqual(["성수 라멘"]);
+  });
+});
+
 describe("useMatzipCommunity", () => {
   it("does not load Naver candidates from the default fallback before browser location resolves", async () => {
     Object.defineProperty(navigator, "geolocation", {
@@ -169,6 +231,67 @@ describe("useMatzipCommunity", () => {
     });
 
     expect(getNearbyCandidateFetchUrls(fetchSpy)).toHaveLength(0);
+  });
+
+  it("bootstraps visible map data when the first bounds report happened before browser location resolved", async () => {
+    let resolveLocation: PositionCallback | undefined;
+    Object.defineProperty(navigator, "geolocation", {
+      configurable: true,
+      value: {
+        getCurrentPosition(success: PositionCallback) {
+          resolveLocation = success;
+        },
+      },
+    });
+    const fetchSpy = vi.mocked(globalThis.fetch);
+    const { result } = renderHook(() => useMatzipCommunity());
+
+    await waitFor(() => {
+      expect(result.current.locationStatus).toBe("requesting");
+    });
+
+    act(() => {
+      result.current.handleVisibleBoundsChange(
+        {
+          south: 37.56,
+          north: 37.58,
+          west: 126.97,
+          east: 126.99,
+        },
+        "서울특별시"
+      );
+    });
+
+    expect(getNearbyCandidateFetchUrls(fetchSpy)).toHaveLength(0);
+
+    act(() => {
+      resolveLocation?.({
+        coords: {
+          latitude: browserLocation.latitude,
+          longitude: browserLocation.longitude,
+          accuracy: 10,
+        },
+      } as GeolocationPosition);
+    });
+
+    await waitFor(() => {
+      const candidateUrls = getNearbyCandidateFetchUrls(fetchSpy).map(
+        (url) => new URL(url, "http://localhost")
+      );
+
+      expect(
+        candidateUrls.some(
+          (url) =>
+            Math.abs(Number(url.searchParams.get("latitude")) - browserLocation.latitude) <
+              0.000001 &&
+            Math.abs(Number(url.searchParams.get("longitude")) - browserLocation.longitude) <
+              0.000001
+        )
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(result.current.filteredPlaces.map((place) => place.name)).toContain("성수 손칼국수");
+    });
   });
 
   it("loads visible-map candidates after the browser location falls back", async () => {
@@ -312,6 +435,10 @@ describe("useMatzipCommunity", () => {
     await waitFor(() => {
       expect(result.current.locationStatus).toBe("ready");
     });
+    await waitFor(() => {
+      expect(getNearbyCandidateFetchUrls(fetchSpy).length).toBeGreaterThan(0);
+    });
+    fetchSpy.mockClear();
 
     act(() => {
       result.current.handleVisibleBoundsChange(bounds, "마곡동");
@@ -328,15 +455,28 @@ describe("useMatzipCommunity", () => {
     expect(getNearbyCandidateFetchUrls(fetchSpy)).toHaveLength(1);
   });
 
-  it("waits for visible map bounds before loading Naver candidates on startup", async () => {
+  it("bootstraps Naver candidates from browser location when startup bounds are missing", async () => {
     const fetchSpy = vi.mocked(globalThis.fetch);
-    renderHook(() => useMatzipCommunity());
+    const { result } = renderHook(() => useMatzipCommunity());
 
     await waitFor(() => {
-      expect(fetchSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining("/api/nearby-place-candidates?"),
-        expect.anything()
+      expect(result.current.locationStatus).toBe("ready");
+    });
+
+    await waitFor(() => {
+      const candidateUrls = getNearbyCandidateFetchUrls(fetchSpy).map(
+        (url) => new URL(url, "http://localhost")
       );
+
+      expect(
+        candidateUrls.some(
+          (url) =>
+            Math.abs(Number(url.searchParams.get("latitude")) - browserLocation.latitude) <
+              0.000001 &&
+            Math.abs(Number(url.searchParams.get("longitude")) - browserLocation.longitude) <
+              0.000001
+        )
+      ).toBe(true);
     });
   });
 
@@ -433,6 +573,10 @@ describe("useMatzipCommunity", () => {
     await waitFor(() => {
       expect(result.current.locationStatus).toBe("ready");
     });
+    await waitFor(() => {
+      expect(getNearbyCandidateFetchUrls(fetchSpy).length).toBeGreaterThan(0);
+    });
+    fetchSpy.mockClear();
 
     act(() => {
       result.current.handleVisibleBoundsChange(bounds, "성수동");
@@ -624,4 +768,103 @@ function getNearbyCandidateFetchUrls(fetchSpy: ReturnType<typeof vi.mocked<typeo
   return fetchSpy.mock.calls
     .map(([input]) => String(input))
     .filter((url) => url.startsWith("/api/nearby-place-candidates?"));
+}
+
+function createSupabaseClientMock() {
+  return {
+    auth: {
+      getSession: vi.fn(() =>
+        Promise.resolve({
+          data: {
+            session: {
+              user: { id: "anon-1" },
+            },
+          },
+        })
+      ),
+      signInAnonymously: vi.fn(),
+    },
+    from: vi.fn((table: string) => {
+      if (table === "anonymous_profiles") {
+        return createMaybeSingleQuery({
+          data: {
+            id: "anon-1",
+            nickname: "테스트 닉네임",
+          },
+          error: null,
+        });
+      }
+
+      if (table === "places") {
+        return createListQuery({
+          data: [
+            {
+              id: "sample-1",
+              owner_id: "sample",
+              naver_place_key: null,
+              name: "성수 손칼국수",
+              address: "서울 성동구 성수이로 10",
+              latitude: browserLocation.latitude,
+              longitude: browserLocation.longitude,
+              category_id: "budget",
+              tag_ids: [],
+              hero_image_url: null,
+              photo_urls: [],
+              status: "public",
+              created_at: "2026-05-16T00:00:00.000Z",
+            },
+          ],
+          error: null,
+        });
+      }
+
+      if (table === "reviews") {
+        return createListQuery({
+          data: [
+            {
+              id: "review-1",
+              place_id: "sample-1",
+              owner_id: "sample-reviewer",
+              nickname: "테스터",
+              price_range: "1만원 이하",
+              recommended_menu: "칼국수",
+              good_point: "좋아요",
+              bad_point: "없어요",
+              revisit_intent: "yes",
+              image_url: null,
+              status: "public",
+              created_at: "2026-05-16T00:01:00.000Z",
+            },
+          ],
+          error: null,
+        });
+      }
+
+      throw new Error(`Unexpected Supabase table: ${table}`);
+    }),
+  };
+}
+
+function createListQuery<T>(result: { data: T[]; error: null | { message: string } }) {
+  const query = {
+    select: vi.fn(() => query),
+    eq: vi.fn(() => query),
+    gte: vi.fn(() => query),
+    lte: vi.fn(() => query),
+    in: vi.fn(() => query),
+    order: vi.fn(() => Promise.resolve(result)),
+    then: vi.fn((resolve, reject) => Promise.resolve(result).then(resolve, reject)),
+  };
+
+  return query;
+}
+
+function createMaybeSingleQuery<T>(result: { data: T | null; error: null | { message: string } }) {
+  const query = {
+    select: vi.fn(() => query),
+    eq: vi.fn(() => query),
+    maybeSingle: vi.fn(() => Promise.resolve(result)),
+  };
+
+  return query;
 }
