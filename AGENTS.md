@@ -76,6 +76,23 @@ Before writing code for product or engineering work, automatically follow
 `docs/agent-planning-review-workflow.md`. The user should not need to ask for
 this step explicitly.
 
+## Explicit Code Start Gate
+
+For product or engineering work, do not write or edit code before the planning
+step is complete. This includes source files, tests, configuration, build files,
+migrations, scripts, and generated implementation artifacts. Documentation and
+planning-note edits are allowed when they are part of preparing the plan.
+
+Always create or update the Notion plan first, then wait for the user's
+explicit implementation approval before touching code. The approval must be a
+clear Korean proceed instruction such as `진행해`, `진행해줘`, or
+`바로 진행해`.
+
+If the user's original request already includes `바로 진행해`, treat that as
+explicit approval to continue into implementation in the same turn after the
+Notion planning step is recorded. Otherwise, stop after the plan and ask for
+approval before writing code.
+
 At minimum, create or update a planning note that includes:
 
 - the feature or behavior to build,
