@@ -1,15 +1,16 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   Flag,
   MapPin,
+  MessageSquarePlus,
   Pencil,
   Plus,
   RefreshCw,
   Search,
-  ShieldCheck,
   Trash2,
   UserRound,
   Utensils,
@@ -33,6 +34,10 @@ const categoryMap = new Map<string, (typeof PLACE_CATEGORIES)[number]>(
 const tagMap = new Map<string, (typeof PLACE_TAGS)[number]>(
   PLACE_TAGS.map((item) => [item.id, item])
 );
+const VIRTUAL_REVIEW_THRESHOLD = 8;
+const REVIEW_CARD_ESTIMATED_HEIGHT = 260;
+const REVIEW_LIST_MAX_HEIGHT = 640;
+const REVIEW_LIST_OVERSCAN = 3;
 
 export function MatzipCommunityApp({ initialSearchQuery = "" }: { initialSearchQuery?: string }) {
   const router = useRouter();
@@ -62,7 +67,6 @@ export function MatzipCommunityApp({ initialSearchQuery = "" }: { initialSearchQ
     filteredCandidates,
     mapPlaces,
     selectedPlace,
-    isSupabaseReady,
     handleRequestUserLocation,
     handleVisibleBoundsChange,
     handleSearchSubmit,
@@ -214,7 +218,7 @@ export function MatzipCommunityApp({ initialSearchQuery = "" }: { initialSearchQ
                 <UserRound size={18} />
                 <strong>내 익명 닉네임</strong>
                 <span className="ml-auto rounded-md bg-[#eef8f2] px-2 py-1 text-xs font-black text-[#0f7a5f]">
-                  {profile.backend === "supabase" ? "Supabase" : "Local"}
+                  Supabase
                 </span>
               </div>
               <div className="mt-3 flex gap-2">
@@ -240,12 +244,6 @@ export function MatzipCommunityApp({ initialSearchQuery = "" }: { initialSearchQ
                   저장
                 </button>
               </div>
-              {!isSupabaseReady ? (
-                <p className="mt-3 flex items-center gap-2 text-xs font-semibold text-[#7a6a33]">
-                  <ShieldCheck size={14} />
-                  Supabase 설정이 준비되지 않아 브라우저 저장소로 동작합니다.
-                </p>
-              ) : null}
             </section>
 
             {panelMode === "new-place" ? (
@@ -471,6 +469,7 @@ export function PlaceDetail({
   onEditPlace,
   onDeletePlace,
   onReportPlace,
+  onWriteReview,
   onEditReview,
   onDeleteReview,
   onReportReview,
@@ -481,6 +480,7 @@ export function PlaceDetail({
   onEditPlace: () => void;
   onDeletePlace: () => void;
   onReportPlace: () => void;
+  onWriteReview: () => void;
   onEditReview: (review: Review) => void;
   onDeleteReview: (reviewId: string) => void;
   onReportReview: (reviewId: string) => void;
@@ -568,31 +568,139 @@ export function PlaceDetail({
       </div>
 
       <div>
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-lg font-black">리뷰 리스트</h3>
-          <span className="text-sm font-bold text-[#70847b]">{reviews.length}개</span>
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-lg font-black">리뷰 리스트</h3>
+            <span className="mt-1 block text-sm font-bold text-[#70847b]">{reviews.length}개</span>
+          </div>
+          <button
+            type="button"
+            onClick={onWriteReview}
+            className="flex h-10 w-full items-center justify-center gap-2 rounded-md bg-[#0f7a5f] px-4 text-sm font-black text-white transition hover:bg-[#0b5f4a] sm:w-auto"
+          >
+            <MessageSquarePlus size={16} />
+            리뷰쓰기
+          </button>
         </div>
+        <ReviewList
+          reviews={reviews}
+          profile={profile}
+          onEditReview={onEditReview}
+          onDeleteReview={onDeleteReview}
+          onReportReview={onReportReview}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ReviewList({
+  reviews,
+  profile,
+  onEditReview,
+  onDeleteReview,
+  onReportReview,
+}: {
+  reviews: Review[];
+  profile: AnonymousProfile;
+  onEditReview: (review: Review) => void;
+  onDeleteReview: (reviewId: string) => void;
+  onReportReview: (reviewId: string) => void;
+}) {
+  if (!reviews.length) {
+    return (
+      <div className="rounded-md border border-dashed border-[#b8c9c0] bg-white p-4 text-sm font-semibold text-[#70847b]">
+        아직 리뷰가 없습니다.
+      </div>
+    );
+  }
+
+  if (reviews.length < VIRTUAL_REVIEW_THRESHOLD) {
+    return (
+      <div className="space-y-3">
+        {reviews.map((review) => (
+          <ReviewItem
+            key={review.id}
+            review={review}
+            isOwner={canMutateContent(profile.id, review)}
+            onEdit={() => onEditReview(review)}
+            onDelete={() => onDeleteReview(review.id)}
+            onReport={() => onReportReview(review.id)}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <VirtualReviewList
+      reviews={reviews}
+      profile={profile}
+      onEditReview={onEditReview}
+      onDeleteReview={onDeleteReview}
+      onReportReview={onReportReview}
+    />
+  );
+}
+
+function VirtualReviewList({
+  reviews,
+  profile,
+  onEditReview,
+  onDeleteReview,
+  onReportReview,
+}: {
+  reviews: Review[];
+  profile: AnonymousProfile;
+  onEditReview: (review: Review) => void;
+  onDeleteReview: (reviewId: string) => void;
+  onReportReview: (reviewId: string) => void;
+}) {
+  const [scrollTop, setScrollTop] = useState(0);
+  const viewportHeight = Math.min(
+    REVIEW_LIST_MAX_HEIGHT,
+    reviews.length * REVIEW_CARD_ESTIMATED_HEIGHT
+  );
+  const { startIndex, endIndex } = useMemo(
+    () => getVirtualReviewRange(reviews.length, scrollTop, viewportHeight),
+    [reviews.length, scrollTop, viewportHeight]
+  );
+  const visibleReviews = reviews.slice(startIndex, endIndex);
+  const topSpacerHeight = startIndex * REVIEW_CARD_ESTIMATED_HEIGHT;
+  const bottomSpacerHeight = (reviews.length - endIndex) * REVIEW_CARD_ESTIMATED_HEIGHT;
+
+  return (
+    <div
+      data-testid="review-list-viewport"
+      className="overflow-y-auto overscroll-contain rounded-md border border-[#d9e4dd] bg-[#fbfdfb] p-3"
+      style={{ height: viewportHeight }}
+      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
+    >
+      <div style={{ paddingTop: topSpacerHeight, paddingBottom: bottomSpacerHeight }}>
         <div className="space-y-3">
-          {reviews.length ? (
-            reviews.map((review) => (
-              <ReviewItem
-                key={review.id}
-                review={review}
-                isOwner={canMutateContent(profile.id, review)}
-                onEdit={() => onEditReview(review)}
-                onDelete={() => onDeleteReview(review.id)}
-                onReport={() => onReportReview(review.id)}
-              />
-            ))
-          ) : (
-            <div className="rounded-md border border-dashed border-[#b8c9c0] bg-white p-4 text-sm font-semibold text-[#70847b]">
-              아직 리뷰가 없습니다.
-            </div>
-          )}
+          {visibleReviews.map((review) => (
+            <ReviewItem
+              key={review.id}
+              review={review}
+              isOwner={canMutateContent(profile.id, review)}
+              onEdit={() => onEditReview(review)}
+              onDelete={() => onDeleteReview(review.id)}
+              onReport={() => onReportReview(review.id)}
+            />
+          ))}
         </div>
       </div>
     </div>
   );
+}
+
+function getVirtualReviewRange(totalCount: number, scrollTop: number, viewportHeight: number) {
+  const firstVisibleIndex = Math.floor(scrollTop / REVIEW_CARD_ESTIMATED_HEIGHT);
+  const visibleCount = Math.ceil(viewportHeight / REVIEW_CARD_ESTIMATED_HEIGHT);
+  const startIndex = Math.max(0, firstVisibleIndex - REVIEW_LIST_OVERSCAN);
+  const endIndex = Math.min(totalCount, firstVisibleIndex + visibleCount + REVIEW_LIST_OVERSCAN);
+
+  return { startIndex, endIndex };
 }
 
 function ReviewItem({
@@ -609,7 +717,10 @@ function ReviewItem({
   onReport: () => void;
 }) {
   return (
-    <article className="rounded-md border border-[#d9e4dd] bg-white p-4">
+    <article
+      data-testid="review-card"
+      className="rounded-md border border-[#d9e4dd] bg-white p-4 shadow-sm"
+    >
       <div className="flex items-start justify-between gap-3">
         <div>
           <strong>{review.nickname}</strong>
