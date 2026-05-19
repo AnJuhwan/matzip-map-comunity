@@ -60,6 +60,7 @@ export type Review = {
   ownerAnonymousId: string;
   status: ContentStatus;
   imageUrl?: string;
+  imageUrls?: string[];
   createdAt?: string;
 };
 
