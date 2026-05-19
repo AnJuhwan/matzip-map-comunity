@@ -628,7 +628,7 @@ export function useMatzipCommunity(initialSearchQuery = "") {
   async function handleSaveReview(input: {
     id?: string;
     review: Omit<Review, "id" | "status" | "createdAt">;
-    imageFile?: File | null;
+    imageFiles?: File[] | null;
   }) {
     if (!profile) {
       return;

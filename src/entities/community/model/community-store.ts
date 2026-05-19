@@ -60,6 +60,7 @@ type DbReviewRow = {
   bad_point: string;
   revisit_intent: Review["revisitIntent"];
   image_url: string | null;
+  image_urls?: string[] | null;
   status: ContentStatus;
   created_at: string;
 };
@@ -85,6 +86,7 @@ type PlaceMutationPayload = {
 const SUPABASE_REQUIRED_MESSAGE =
   "Supabase 설정이 필요합니다. 사용자 데이터는 브라우저 저장소에 저장하지 않습니다.";
 export const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+export const MAX_REVIEW_PHOTOS = 3;
 
 const allowedPhotoMimeTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const photoMimeExtensions: Record<string, string> = {
@@ -385,11 +387,19 @@ export async function saveReview(input: {
   id?: string;
   review: Omit<Review, "id" | "status" | "createdAt">;
   imageFile?: File | null;
+  imageFiles?: File[] | null;
   activeAnonymousId: string;
 }) {
-  const imageUrl = input.imageFile
-    ? await uploadPhoto(input.imageFile, input.activeAnonymousId, "review")
-    : input.review.imageUrl;
+  const nextImageFiles = getReviewImageFiles(input.imageFiles, input.imageFile);
+  validateReviewPhotoFiles(nextImageFiles);
+  const uploadedImageUrls = nextImageFiles.length
+    ? await Promise.all(
+        nextImageFiles.map((imageFile) => uploadPhoto(imageFile, input.activeAnonymousId, "review"))
+      )
+    : null;
+  const imageUrls =
+    uploadedImageUrls ?? normalizeReviewImageUrls(input.review.imageUrls, input.review.imageUrl);
+  const legacyImageUrl = imageUrls[0] ?? input.review.imageUrl ?? null;
   const supabase = getBrowserSupabaseClient();
 
   if (!supabase) {
@@ -405,7 +415,8 @@ export async function saveReview(input: {
     good_point: input.review.goodPoint.trim(),
     bad_point: input.review.badPoint.trim(),
     revisit_intent: input.review.revisitIntent,
-    image_url: imageUrl ?? null,
+    image_url: legacyImageUrl,
+    image_urls: imageUrls,
   };
   const result = input.id
     ? await supabase
@@ -512,6 +523,32 @@ export function validatePhotoFile(file: File) {
   }
 }
 
+function getReviewImageFiles(imageFiles?: File[] | null, imageFile?: File | null) {
+  if (imageFiles) {
+    return imageFiles;
+  }
+
+  return imageFile ? [imageFile] : [];
+}
+
+export function validateReviewPhotoFiles(files: File[]) {
+  if (files.length > MAX_REVIEW_PHOTOS) {
+    throw new Error(`리뷰 사진은 최대 ${MAX_REVIEW_PHOTOS}장까지 업로드할 수 있습니다.`);
+  }
+
+  files.forEach(validatePhotoFile);
+}
+
+function normalizeReviewImageUrls(imageUrls?: string[] | null, legacyImageUrl?: string | null) {
+  const normalizedUrls = (imageUrls ?? []).filter(Boolean);
+
+  if (normalizedUrls.length) {
+    return normalizedUrls;
+  }
+
+  return legacyImageUrl ? [legacyImageUrl] : [];
+}
+
 function mapPlaceFromRow(row: DbPlaceRow): Place {
   return {
     id: row.id,
@@ -531,6 +568,8 @@ function mapPlaceFromRow(row: DbPlaceRow): Place {
 }
 
 function mapReviewFromRow(row: DbReviewRow): Review {
+  const imageUrls = normalizeReviewImageUrls(row.image_urls, row.image_url);
+
   return {
     id: row.id,
     placeId: row.place_id,
@@ -541,7 +580,8 @@ function mapReviewFromRow(row: DbReviewRow): Review {
     goodPoint: row.good_point,
     badPoint: row.bad_point,
     revisitIntent: row.revisit_intent,
-    imageUrl: row.image_url ?? undefined,
+    imageUrl: imageUrls[0] ?? undefined,
+    imageUrls,
     status: row.status,
     createdAt: row.created_at,
   };

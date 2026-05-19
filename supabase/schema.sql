@@ -35,6 +35,7 @@ create table if not exists public.reviews (
   bad_point text not null check (char_length(bad_point) between 1 and 500),
   revisit_intent text not null check (revisit_intent in ('yes', 'maybe', 'no')),
   image_url text,
+  image_urls text[] not null default '{}',
   status text not null default 'public' check (status in ('public', 'hidden', 'deleted')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()

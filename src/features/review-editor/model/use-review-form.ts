@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
+  MAX_REVIEW_PHOTOS,
   type AnonymousProfile,
   type PriceRange,
   type Review,
   type RevisitIntent,
+  validateReviewPhotoFiles,
 } from "@/entities/community";
 
 export type ReviewFormProps = {
@@ -17,6 +19,7 @@ export type ReviewFormProps = {
     id?: string;
     review: Omit<Review, "id" | "status" | "createdAt">;
     imageFile?: File | null;
+    imageFiles?: File[] | null;
   }) => Promise<void>;
 };
 
@@ -33,9 +36,41 @@ export function useReviewForm({ placeId, profile, editingReview, onSave }: UseRe
   const [revisitIntent, setRevisitIntent] = useState<RevisitIntent>(
     editingReview?.revisitIntent ?? "yes"
   );
-  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [imagePreviewUrls, setImagePreviewUrls] = useState<string[]>([]);
+  const [activeImagePreviewIndex, setActiveImagePreviewIndex] = useState(0);
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      imagePreviewUrls.forEach((previewUrl) => URL.revokeObjectURL(previewUrl));
+    };
+  }, [imagePreviewUrls]);
+
+  function clearImageFiles() {
+    setImageFiles([]);
+    setImagePreviewUrls([]);
+    setActiveImagePreviewIndex(0);
+  }
+
+  function handleImageFilesChange(files: FileList | File[] | null) {
+    setMessage("");
+
+    const nextImageFiles = Array.from(files ?? []);
+
+    try {
+      validateReviewPhotoFiles(nextImageFiles);
+    } catch (error) {
+      clearImageFiles();
+      setMessage(error instanceof Error ? error.message : "리뷰 사진을 확인해주세요.");
+      return;
+    }
+
+    setImageFiles(nextImageFiles);
+    setImagePreviewUrls(nextImageFiles.map((file) => URL.createObjectURL(file)));
+    setActiveImagePreviewIndex(0);
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -61,14 +96,15 @@ export function useReviewForm({ placeId, profile, editingReview, onSave }: UseRe
           revisitIntent,
           ownerAnonymousId: profile.id,
           imageUrl: editingReview?.imageUrl,
+          imageUrls: editingReview?.imageUrls,
         },
-        imageFile,
+        imageFiles,
       });
       setRecommendedMenu("");
       setGoodPoint("");
       setBadPoint("");
       setRevisitIntent("yes");
-      setImageFile(null);
+      clearImageFiles();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "리뷰 저장 실패");
     } finally {
@@ -89,7 +125,12 @@ export function useReviewForm({ placeId, profile, editingReview, onSave }: UseRe
     setBadPoint,
     revisitIntent,
     setRevisitIntent,
-    setImageFile,
+    imageFiles,
+    imagePreviewUrls,
+    activeImagePreviewIndex,
+    setActiveImagePreviewIndex,
+    handleImageFilesChange,
+    maxReviewPhotos: MAX_REVIEW_PHOTOS,
     message,
     isSaving,
     handleSubmit,

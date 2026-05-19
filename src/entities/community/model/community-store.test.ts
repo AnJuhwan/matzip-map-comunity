@@ -246,6 +246,206 @@ describe("loadCommunityData", () => {
     expect(data.places.map((place) => place.id)).toEqual(["visible-place"]);
     expect(data.reviews.map((review) => review.id)).toEqual(["visible-review"]);
   });
+
+  it("maps multiple review image URLs and falls back to legacy single images", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://images.example.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "publishable-key";
+
+    const placesQuery = createSupabaseQuery({
+      data: [
+        {
+          id: "photo-place",
+          owner_id: "anon-1",
+          naver_place_key: null,
+          name: "사진 맛집",
+          address: "서울 중구 세종대로 110",
+          latitude: 37.5667,
+          longitude: 126.9784,
+          category_id: "local",
+          tag_ids: [],
+          hero_image_url: null,
+          photo_urls: [],
+          status: "public",
+          created_at: "2026-05-16T00:00:00.000Z",
+        },
+      ],
+      error: null,
+    });
+    const reviewsQuery = createSupabaseQuery({
+      data: [
+        {
+          id: "multi-photo-review",
+          place_id: "photo-place",
+          owner_id: "anon-2",
+          nickname: "든든한 국밥친구",
+          price_range: "1만원 이하",
+          recommended_menu: "칼국수",
+          good_point: "사진이 많아요",
+          bad_point: "없어요",
+          revisit_intent: "yes",
+          image_url: "https://example.com/legacy.jpg",
+          image_urls: ["https://example.com/one.jpg", "https://example.com/two.jpg"],
+          status: "public",
+          created_at: "2026-05-16T00:01:00.000Z",
+        },
+        {
+          id: "legacy-photo-review",
+          place_id: "photo-place",
+          owner_id: "anon-3",
+          nickname: "솔직한 면발수호자",
+          price_range: "1만-2만원",
+          recommended_menu: "비빔밥",
+          good_point: "옛날 사진도 보여요",
+          bad_point: "없어요",
+          revisit_intent: "maybe",
+          image_url: "https://example.com/legacy-only.jpg",
+          image_urls: [],
+          status: "public",
+          created_at: "2026-05-16T00:02:00.000Z",
+        },
+      ],
+      error: null,
+    });
+    const client = {
+      from: vi.fn((table: string) => {
+        if (table === "places") {
+          return placesQuery;
+        }
+
+        if (table === "reviews") {
+          return reviewsQuery;
+        }
+
+        throw new Error(`Unexpected table: ${table}`);
+      }),
+    };
+
+    vi.mocked(createClient).mockReturnValue(client as never);
+
+    const data = await loadCommunityData();
+
+    expect(data.reviews[0]).toMatchObject({
+      id: "multi-photo-review",
+      imageUrl: "https://example.com/one.jpg",
+      imageUrls: ["https://example.com/one.jpg", "https://example.com/two.jpg"],
+    });
+    expect(data.reviews[1]).toMatchObject({
+      id: "legacy-photo-review",
+      imageUrl: "https://example.com/legacy-only.jpg",
+      imageUrls: ["https://example.com/legacy-only.jpg"],
+    });
+  });
+});
+
+describe("saveReview", () => {
+  it("uploads multiple review photos and stores the first URL for legacy clients", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://review-images.example.co";
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "publishable-key";
+
+    const reviewMutationQuery = createMutationSupabaseQuery({
+      data: {
+        id: "saved-review",
+        place_id: "place-1",
+        owner_id: "anon-1",
+        nickname: "테스터",
+        price_range: "1만원 이하",
+        recommended_menu: "칼국수",
+        good_point: "좋아요",
+        bad_point: "없어요",
+        revisit_intent: "yes",
+        image_url: "https://cdn.example/anon-1/review-first.jpg",
+        image_urls: [
+          "https://cdn.example/anon-1/review-first.jpg",
+          "https://cdn.example/anon-1/review-second.png",
+        ],
+        status: "public",
+        created_at: "2026-05-16T00:01:00.000Z",
+      },
+      error: null,
+    });
+    const upload = vi.fn(() => Promise.resolve({ data: {}, error: null }));
+    const getPublicUrl = vi.fn((path: string) => ({
+      data: { publicUrl: `https://cdn.example/${path}` },
+    }));
+    const client = {
+      from: vi.fn((table: string) => {
+        if (table === "reviews") {
+          return reviewMutationQuery;
+        }
+
+        throw new Error(`Unexpected table: ${table}`);
+      }),
+      storage: {
+        from: vi.fn(() => ({
+          upload,
+          getPublicUrl,
+        })),
+      },
+    };
+
+    vi.mocked(createClient).mockReturnValue(client as never);
+
+    const saved = await saveReview({
+      activeAnonymousId: "anon-1",
+      review: {
+        placeId: "place-1",
+        ownerAnonymousId: "anon-1",
+        nickname: "테스터",
+        priceRange: "1만원 이하",
+        recommendedMenu: "칼국수",
+        goodPoint: "좋아요",
+        badPoint: "없어요",
+        revisitIntent: "yes",
+      },
+      imageFiles: [
+        new File(["first"], "first.jpg", { type: "image/jpeg" }),
+        new File(["second"], "second.png", { type: "image/png" }),
+      ],
+    });
+
+    const payload = reviewMutationQuery.insert.mock.calls[0][0];
+
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(payload).toMatchObject({
+      image_url: expect.stringMatching(/^https:\/\/cdn\.example\/anon-1\/review-/),
+      image_urls: [
+        expect.stringMatching(/^https:\/\/cdn\.example\/anon-1\/review-/),
+        expect.stringMatching(/^https:\/\/cdn\.example\/anon-1\/review-/),
+      ],
+    });
+    expect(saved).toMatchObject({
+      id: "saved-review",
+      imageUrl: "https://cdn.example/anon-1/review-first.jpg",
+      imageUrls: [
+        "https://cdn.example/anon-1/review-first.jpg",
+        "https://cdn.example/anon-1/review-second.png",
+      ],
+    });
+  });
+
+  it("rejects reviews with more than three uploaded photos", async () => {
+    await expect(
+      saveReview({
+        activeAnonymousId: "anon-1",
+        review: {
+          placeId: "place-1",
+          ownerAnonymousId: "anon-1",
+          nickname: "테스터",
+          priceRange: "1만원 이하",
+          recommendedMenu: "칼국수",
+          goodPoint: "좋아요",
+          badPoint: "없어요",
+          revisitIntent: "yes",
+        },
+        imageFiles: [
+          new File(["one"], "one.jpg", { type: "image/jpeg" }),
+          new File(["two"], "two.jpg", { type: "image/jpeg" }),
+          new File(["three"], "three.jpg", { type: "image/jpeg" }),
+          new File(["four"], "four.jpg", { type: "image/jpeg" }),
+        ],
+      })
+    ).rejects.toThrow("리뷰 사진은 최대 3장까지 업로드할 수 있습니다.");
+  });
 });
 
 describe("savePlace", () => {

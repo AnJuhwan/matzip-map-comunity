@@ -4,6 +4,13 @@ import { describe, expect, it } from "vitest";
 const schema = readFileSync(new URL("./schema.sql", import.meta.url), "utf8");
 
 describe("Supabase RLS policies", () => {
+  it("stores multiple review images while preserving the legacy image URL column", () => {
+    const compactSchema = compact(schema);
+
+    expect(compactSchema).toContain("image_url text");
+    expect(compactSchema).toContain("image_urls text[] not null default '{}'");
+  });
+
   it("prevents owners from updating moderated places back to public", () => {
     const policy = compact(policySql("Owners can update their places"));
 

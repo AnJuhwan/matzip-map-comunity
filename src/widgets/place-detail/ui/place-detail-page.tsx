@@ -107,7 +107,7 @@ export function SavedPlaceDetailPage({ placeId }: { placeId: string }) {
   async function handleSaveReview(input: {
     id?: string;
     review: Omit<Review, "id" | "status" | "createdAt">;
-    imageFile?: File | null;
+    imageFiles?: File[] | null;
   }) {
     if (!profile) {
       return;
@@ -277,7 +277,7 @@ export function CandidatePlaceDetailPage({ candidate }: { candidate: NaverPlaceC
   async function handleSaveCandidateReview(input: {
     id?: string;
     review: Omit<Review, "id" | "status" | "createdAt">;
-    imageFile?: File | null;
+    imageFiles?: File[] | null;
   }) {
     if (!profile || !candidate) {
       return;
@@ -301,7 +301,7 @@ export function CandidatePlaceDetailPage({ candidate }: { candidate: NaverPlaceC
 
     await saveReview({
       activeAnonymousId: profile.id,
-      imageFile: input.imageFile,
+      imageFiles: input.imageFiles,
       review: {
         ...input.review,
         placeId: savedPlace.id,
@@ -371,7 +371,7 @@ function DetailPageFrame({ children }: { children: ReactNode }) {
 
   return (
     <main className="min-h-screen bg-[#f6faf7] px-4 py-5 text-[#17352b] sm:px-6">
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-5xl">
         <button
           type="button"
           onClick={() => router.push("/")}
