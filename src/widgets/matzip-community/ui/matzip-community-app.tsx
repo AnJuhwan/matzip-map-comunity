@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Flag,
@@ -35,11 +35,9 @@ const categoryMap = new Map<string, (typeof PLACE_CATEGORIES)[number]>(
 const tagMap = new Map<string, (typeof PLACE_TAGS)[number]>(
   PLACE_TAGS.map((item) => [item.id, item])
 );
-const VIRTUAL_REVIEW_THRESHOLD = 8;
+const WINDOW_VIRTUAL_REVIEW_THRESHOLD = 8;
 const REVIEW_CARD_ESTIMATED_HEIGHT = 260;
-const REVIEW_LIST_MAX_HEIGHT = 640;
 const REVIEW_LIST_OVERSCAN = 3;
-
 export function MatzipCommunityApp({ initialSearchQuery = "" }: { initialSearchQuery?: string }) {
   const router = useRouter();
   const community = useMatzipCommunity(initialSearchQuery);
@@ -490,8 +488,11 @@ export function PlaceDetail({
   const ownsPlace = canMutateContent(profile.id, place);
 
   return (
-    <div className="space-y-4">
-      <div className="overflow-hidden rounded-md border border-[#d9e4dd] bg-white">
+    <div className="grid gap-5 lg:grid-cols-[minmax(280px,360px)_minmax(0,1fr)] lg:items-start">
+      <section
+        data-testid="place-detail-info"
+        className="overflow-hidden rounded-md border border-[#d9e4dd] bg-white lg:sticky lg:top-4"
+      >
         {place.heroImageUrl ? (
           <div
             className="h-52 w-full bg-cover bg-center"
@@ -566,9 +567,9 @@ export function PlaceDetail({
             </div>
           ) : null}
         </div>
-      </div>
+      </section>
 
-      <div>
+      <section>
         <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h3 className="text-lg font-black">리뷰 리스트</h3>
@@ -590,7 +591,7 @@ export function PlaceDetail({
           onDeleteReview={onDeleteReview}
           onReportReview={onReportReview}
         />
-      </div>
+      </section>
     </div>
   );
 }
@@ -616,7 +617,7 @@ function ReviewList({
     );
   }
 
-  if (reviews.length < VIRTUAL_REVIEW_THRESHOLD) {
+  if (reviews.length < WINDOW_VIRTUAL_REVIEW_THRESHOLD) {
     return (
       <div className="space-y-3">
         {reviews.map((review) => (
@@ -634,7 +635,7 @@ function ReviewList({
   }
 
   return (
-    <VirtualReviewList
+    <WindowVirtualReviewList
       reviews={reviews}
       profile={profile}
       onEditReview={onEditReview}
@@ -644,7 +645,7 @@ function ReviewList({
   );
 }
 
-function VirtualReviewList({
+function WindowVirtualReviewList({
   reviews,
   profile,
   onEditReview,
@@ -657,26 +658,44 @@ function VirtualReviewList({
   onDeleteReview: (reviewId: string) => void;
   onReportReview: (reviewId: string) => void;
 }) {
-  const [scrollTop, setScrollTop] = useState(0);
-  const viewportHeight = Math.min(
-    REVIEW_LIST_MAX_HEIGHT,
-    reviews.length * REVIEW_CARD_ESTIMATED_HEIGHT
+  const listRef = useRef<HTMLDivElement>(null);
+  const [range, setRange] = useState(() =>
+    getWindowVirtualReviewRange(reviews.length, 0, getViewportHeight())
   );
-  const { startIndex, endIndex } = useMemo(
-    () => getVirtualReviewRange(reviews.length, scrollTop, viewportHeight),
-    [reviews.length, scrollTop, viewportHeight]
-  );
-  const visibleReviews = reviews.slice(startIndex, endIndex);
-  const topSpacerHeight = startIndex * REVIEW_CARD_ESTIMATED_HEIGHT;
-  const bottomSpacerHeight = (reviews.length - endIndex) * REVIEW_CARD_ESTIMATED_HEIGHT;
+
+  useEffect(() => {
+    let animationFrame = 0;
+
+    function updateRange() {
+      const listTop = listRef.current
+        ? window.scrollY + listRef.current.getBoundingClientRect().top
+        : 0;
+      const listScrollOffset = Math.max(0, window.scrollY - listTop);
+      setRange(getWindowVirtualReviewRange(reviews.length, listScrollOffset, getViewportHeight()));
+    }
+
+    function scheduleUpdate() {
+      window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(updateRange);
+    }
+
+    updateRange();
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, [reviews.length]);
+
+  const visibleReviews = reviews.slice(range.startIndex, range.endIndex);
+  const topSpacerHeight = range.startIndex * REVIEW_CARD_ESTIMATED_HEIGHT;
+  const bottomSpacerHeight = (reviews.length - range.endIndex) * REVIEW_CARD_ESTIMATED_HEIGHT;
 
   return (
-    <div
-      data-testid="review-list-viewport"
-      className="overflow-y-auto overscroll-contain rounded-md border border-[#d9e4dd] bg-[#fbfdfb] p-3"
-      style={{ height: viewportHeight }}
-      onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-    >
+    <div ref={listRef} data-testid="review-list-window-virtualizer">
       <div style={{ paddingTop: topSpacerHeight, paddingBottom: bottomSpacerHeight }}>
         <div className="space-y-3">
           {visibleReviews.map((review) => (
@@ -695,13 +714,32 @@ function VirtualReviewList({
   );
 }
 
-function getVirtualReviewRange(totalCount: number, scrollTop: number, viewportHeight: number) {
-  const firstVisibleIndex = Math.floor(scrollTop / REVIEW_CARD_ESTIMATED_HEIGHT);
+function getWindowVirtualReviewRange(
+  totalCount: number,
+  scrollOffset: number,
+  viewportHeight: number
+) {
+  if (totalCount <= 0) {
+    return { startIndex: 0, endIndex: 0 };
+  }
+
+  const firstVisibleIndex = Math.min(
+    totalCount - 1,
+    Math.max(0, Math.floor(scrollOffset / REVIEW_CARD_ESTIMATED_HEIGHT))
+  );
   const visibleCount = Math.ceil(viewportHeight / REVIEW_CARD_ESTIMATED_HEIGHT);
   const startIndex = Math.max(0, firstVisibleIndex - REVIEW_LIST_OVERSCAN);
   const endIndex = Math.min(totalCount, firstVisibleIndex + visibleCount + REVIEW_LIST_OVERSCAN);
 
   return { startIndex, endIndex };
+}
+
+function getViewportHeight() {
+  if (typeof window === "undefined") {
+    return REVIEW_CARD_ESTIMATED_HEIGHT * 3;
+  }
+
+  return window.innerHeight || REVIEW_CARD_ESTIMATED_HEIGHT * 3;
 }
 
 function ReviewItem({

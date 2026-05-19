@@ -371,7 +371,7 @@ function DetailPageFrame({ children }: { children: ReactNode }) {
 
   return (
     <main className="min-h-screen bg-[#f6faf7] px-4 py-5 text-[#17352b] sm:px-6">
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-5xl">
         <button
           type="button"
           onClick={() => router.push("/")}
