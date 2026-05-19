@@ -423,6 +423,47 @@ describe("saveReview", () => {
     });
   });
 
+  it("retries without image_urls when production is missing the review image array column", async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://review-schema-drift.example.co";
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "publishable-key";
+
+    const failingInsertQuery = createMutationSupabaseQuery({
+      data: null,
+      error: { message: "column reviews.image_urls does not exist" },
+    });
+    const retryInsertQuery = createMutationSupabaseQuery({
+      data: createReviewRow({
+        image_url: "https://example.com/one.jpg",
+      }),
+      error: null,
+    });
+    const client = createSequencedSupabaseClient([failingInsertQuery, retryInsertQuery], "reviews");
+
+    vi.mocked(createClient).mockReturnValue(client as never);
+
+    const saved = await saveReview({
+      activeAnonymousId: "anon-1",
+      review: {
+        placeId: "place-1",
+        ownerAnonymousId: "anon-1",
+        nickname: "테스터",
+        priceRange: "1만원 이하",
+        recommendedMenu: "칼국수",
+        goodPoint: "좋아요",
+        badPoint: "없어요",
+        revisitIntent: "yes",
+        imageUrls: ["https://example.com/one.jpg", "https://example.com/two.jpg"],
+      },
+    });
+
+    expect(failingInsertQuery.insert.mock.calls[0][0]).toHaveProperty("image_urls", [
+      "https://example.com/one.jpg",
+      "https://example.com/two.jpg",
+    ]);
+    expect(retryInsertQuery.insert.mock.calls[0][0]).not.toHaveProperty("image_urls");
+    expect(saved.imageUrls).toEqual(["https://example.com/one.jpg"]);
+  });
+
   it("rejects reviews with more than three uploaded photos", async () => {
     await expect(
       saveReview({
@@ -621,10 +662,10 @@ function createMutationSupabaseQuery<T>(result: {
   return query;
 }
 
-function createSequencedSupabaseClient(queries: unknown[]) {
+function createSequencedSupabaseClient(queries: unknown[], expectedTable = "places") {
   return {
     from: vi.fn((table: string) => {
-      if (table !== "places") {
+      if (table !== expectedTable) {
         throw new Error(`Unexpected table: ${table}`);
       }
 
@@ -653,5 +694,24 @@ function createPlaceRow() {
     photo_urls: [],
     status: "public",
     created_at: "2026-05-18T00:00:00.000Z",
+  };
+}
+
+function createReviewRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "saved-review",
+    place_id: "place-1",
+    owner_id: "anon-1",
+    nickname: "테스터",
+    price_range: "1만원 이하",
+    recommended_menu: "칼국수",
+    good_point: "좋아요",
+    bad_point: "없어요",
+    revisit_intent: "yes",
+    image_url: null,
+    image_urls: [],
+    status: "public",
+    created_at: "2026-05-16T00:01:00.000Z",
+    ...overrides,
   };
 }

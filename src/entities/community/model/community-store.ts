@@ -83,6 +83,20 @@ type PlaceMutationPayload = {
   status?: ContentStatus;
 };
 
+type ReviewMutationPayload = {
+  place_id: string;
+  owner_id: string;
+  nickname: string;
+  price_range: Review["priceRange"];
+  recommended_menu: string;
+  good_point: string;
+  bad_point: string;
+  revisit_intent: Review["revisitIntent"];
+  image_url: string | null;
+  image_urls?: string[];
+  status?: ContentStatus;
+};
+
 const SUPABASE_REQUIRED_MESSAGE =
   "Supabase 설정이 필요합니다. 사용자 데이터는 브라우저 저장소에 저장하지 않습니다.";
 export const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
@@ -217,11 +231,26 @@ function isMissingPlaceColumnError(
   error: SupabaseErrorLike | null | undefined,
   columnName: string
 ) {
+  return isMissingTableColumnError(error, "places", columnName);
+}
+
+function isMissingReviewColumnError(
+  error: SupabaseErrorLike | null | undefined,
+  columnName: string
+) {
+  return isMissingTableColumnError(error, "reviews", columnName);
+}
+
+function isMissingTableColumnError(
+  error: SupabaseErrorLike | null | undefined,
+  tableName: string,
+  columnName: string
+) {
   const message = error?.message?.toLowerCase() ?? "";
 
   return (
-    (message.includes(`places.${columnName}`) ||
-      (message.includes(columnName) && message.includes("places"))) &&
+    (message.includes(`${tableName}.${columnName}`) ||
+      (message.includes(columnName) && message.includes(tableName))) &&
     (message.includes("does not exist") || message.includes("schema cache"))
   );
 }
@@ -406,7 +435,7 @@ export async function saveReview(input: {
     throw new Error(SUPABASE_REQUIRED_MESSAGE);
   }
 
-  const payload = {
+  const basePayload: Omit<ReviewMutationPayload, "image_urls" | "status"> = {
     place_id: input.review.placeId,
     owner_id: input.review.ownerAnonymousId,
     nickname: input.review.nickname.trim(),
@@ -416,27 +445,49 @@ export async function saveReview(input: {
     bad_point: input.review.badPoint.trim(),
     revisit_intent: input.review.revisitIntent,
     image_url: legacyImageUrl,
-    image_urls: imageUrls,
   };
-  const result = input.id
-    ? await supabase
-        .from("reviews")
-        .update(payload)
-        .eq("id", input.id)
-        .eq("owner_id", input.activeAnonymousId)
-        .select("*")
-        .single()
-    : await supabase
-        .from("reviews")
-        .insert({ ...payload, status: "public" })
-        .select("*")
-        .single();
+  let canUseImageUrls = true;
+  let result = null;
 
-  if (result.error) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const payload: ReviewMutationPayload = {
+      ...basePayload,
+      ...(canUseImageUrls ? { image_urls: imageUrls } : {}),
+    };
+
+    result = input.id
+      ? await supabase
+          .from("reviews")
+          .update(payload)
+          .eq("id", input.id)
+          .eq("owner_id", input.activeAnonymousId)
+          .select("*")
+          .single()
+      : await supabase
+          .from("reviews")
+          .insert({ ...payload, status: "public" })
+          .select("*")
+          .single();
+
+    if (!result.error) {
+      break;
+    }
+
+    const nextCanUseImageUrls: boolean =
+      canUseImageUrls && !isMissingReviewColumnError(result.error, "image_urls");
+
+    if (nextCanUseImageUrls === canUseImageUrls) {
+      break;
+    }
+
+    canUseImageUrls = nextCanUseImageUrls;
+  }
+
+  if (result?.error) {
     throw new Error(result.error.message);
   }
 
-  return mapReviewFromRow(result.data);
+  return mapReviewFromRow(result!.data);
 }
 
 export async function softDeleteContent(input: {
