@@ -26,6 +26,7 @@ import {
 import { PlaceForm } from "@/features/place-editor";
 import { NaverMap } from "@/features/place-map";
 import { buildCandidateDetailHref, type NearbyPlaceCandidate } from "@/features/naver-place-import";
+import { ImageCarousel } from "@/shared/ui/image-carousel";
 import { useMatzipCommunity } from "../model/use-matzip-community";
 
 const categoryMap = new Map<string, (typeof PLACE_CATEGORIES)[number]>(
@@ -716,6 +717,8 @@ function ReviewItem({
   onDelete: () => void;
   onReport: () => void;
 }) {
+  const imageUrls = getReviewImageUrls(review);
+
   return (
     <article
       data-testid="review-card"
@@ -738,11 +741,12 @@ function ReviewItem({
           <Flag size={14} />
         </button>
       </div>
-      {review.imageUrl ? (
-        <div
-          className="mt-3 h-40 w-full rounded-md bg-cover bg-center"
-          style={imageBackground(review.imageUrl)}
-          aria-hidden="true"
+      {imageUrls.length ? (
+        <ImageCarousel
+          imageUrls={imageUrls}
+          label={`${review.nickname} 리뷰 사진`}
+          className="mt-3"
+          viewportClassName="h-40"
         />
       ) : null}
       <dl className="mt-3 grid gap-3 text-sm">
@@ -781,6 +785,14 @@ function ReviewItem({
       ) : null}
     </article>
   );
+}
+
+function getReviewImageUrls(review: Review) {
+  if (review.imageUrls?.length) {
+    return review.imageUrls;
+  }
+
+  return review.imageUrl ? [review.imageUrl] : [];
 }
 
 function revisitLabel(value: Review["revisitIntent"]) {

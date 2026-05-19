@@ -2,6 +2,7 @@
 
 import { Camera, MessageSquareText, X } from "lucide-react";
 import { PRICE_RANGES, type PriceRange, type RevisitIntent } from "@/entities/community";
+import { ImageCarousel } from "@/shared/ui/image-carousel";
 import { useReviewForm, type ReviewFormProps } from "../model/use-review-form";
 
 export function ReviewForm({
@@ -25,7 +26,9 @@ export function ReviewForm({
     setBadPoint,
     revisitIntent,
     setRevisitIntent,
-    setImageFile,
+    imagePreviewUrls,
+    handleImageFilesChange,
+    maxReviewPhotos,
     message,
     isSaving,
     handleSubmit,
@@ -144,10 +147,23 @@ export function ReviewForm({
         <input
           type="file"
           accept="image/jpeg,image/png,image/webp,image/gif"
-          onChange={(event) => setImageFile(event.target.files?.[0] ?? null)}
+          multiple
+          onChange={(event) => handleImageFilesChange(event.target.files)}
           className="w-full rounded-md border border-dashed border-[#b8c9c0] bg-white px-3 py-3 text-sm text-[#5f6f68]"
         />
+        <span className="mt-2 block text-xs font-bold text-[#70847b]">
+          최대 {maxReviewPhotos}장까지 업로드할 수 있습니다.
+        </span>
       </label>
+
+      {imagePreviewUrls.length ? (
+        <ImageCarousel
+          imageUrls={imagePreviewUrls}
+          label="리뷰 사진 미리보기"
+          className="border border-[#d9e4dd]"
+          viewportClassName="h-44"
+        />
+      ) : null}
 
       {message ? (
         <p className="rounded-md bg-[#ffeceb] px-3 py-2 text-sm font-semibold text-[#9b2f25]">
