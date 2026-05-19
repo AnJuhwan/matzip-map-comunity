@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Flag,
@@ -36,7 +36,8 @@ const tagMap = new Map<string, (typeof PLACE_TAGS)[number]>(
   PLACE_TAGS.map((item) => [item.id, item])
 );
 const WINDOW_VIRTUAL_REVIEW_THRESHOLD = 8;
-const REVIEW_CARD_ESTIMATED_HEIGHT = 260;
+const REVIEW_CARD_ESTIMATED_HEIGHT = 420;
+const REVIEW_CARD_GAP_HEIGHT = 12;
 const REVIEW_LIST_OVERSCAN = 3;
 export function MatzipCommunityApp({ initialSearchQuery = "" }: { initialSearchQuery?: string }) {
   const router = useRouter();
@@ -659,9 +660,41 @@ function WindowVirtualReviewList({
   onReportReview: (reviewId: string) => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
-  const [range, setRange] = useState(() =>
-    getWindowVirtualReviewRange(reviews.length, 0, getViewportHeight())
+  const [viewportState, setViewportState] = useState(() => ({
+    scrollOffset: 0,
+    viewportHeight: getViewportHeight(),
+  }));
+  const [measuredItemSizes, setMeasuredItemSizes] = useState<Record<string, number>>({});
+  const itemSizes = useMemo(
+    () => reviews.map((review) => measuredItemSizes[review.id] ?? REVIEW_CARD_ESTIMATED_HEIGHT),
+    [measuredItemSizes, reviews]
   );
+  const itemOffsets = useMemo(
+    () => buildReviewItemOffsets(itemSizes, reviews.length),
+    [itemSizes, reviews.length]
+  );
+  const range = getWindowVirtualReviewRange(
+    reviews.length,
+    viewportState.scrollOffset,
+    viewportState.viewportHeight,
+    itemOffsets
+  );
+  const handleMeasureReviewItem = useCallback((reviewId: string, size: number) => {
+    if (!size) {
+      return;
+    }
+
+    setMeasuredItemSizes((current) => {
+      if (current[reviewId] === size) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [reviewId]: size,
+      };
+    });
+  }, []);
 
   useEffect(() => {
     let animationFrame = 0;
@@ -671,7 +704,10 @@ function WindowVirtualReviewList({
         ? window.scrollY + listRef.current.getBoundingClientRect().top
         : 0;
       const listScrollOffset = Math.max(0, window.scrollY - listTop);
-      setRange(getWindowVirtualReviewRange(reviews.length, listScrollOffset, getViewportHeight()));
+      setViewportState({
+        scrollOffset: listScrollOffset,
+        viewportHeight: getViewportHeight(),
+      });
     }
 
     function scheduleUpdate() {
@@ -691,24 +727,30 @@ function WindowVirtualReviewList({
   }, [reviews.length]);
 
   const visibleReviews = reviews.slice(range.startIndex, range.endIndex);
-  const topSpacerHeight = range.startIndex * REVIEW_CARD_ESTIMATED_HEIGHT;
-  const bottomSpacerHeight = (reviews.length - range.endIndex) * REVIEW_CARD_ESTIMATED_HEIGHT;
+  const topSpacerHeight = itemOffsets[range.startIndex] ?? 0;
+  const bottomSpacerHeight =
+    (itemOffsets[reviews.length] ?? 0) - (itemOffsets[range.endIndex] ?? 0);
 
   return (
     <div ref={listRef} data-testid="review-list-window-virtualizer">
       <div style={{ paddingTop: topSpacerHeight, paddingBottom: bottomSpacerHeight }}>
-        <div className="space-y-3">
-          {visibleReviews.map((review) => (
-            <ReviewItem
+        {visibleReviews.map((review, visibleIndex) => {
+          const reviewIndex = range.startIndex + visibleIndex;
+
+          return (
+            <MeasuredReviewItem
               key={review.id}
               review={review}
+              reviewIndex={reviewIndex}
+              totalCount={reviews.length}
               isOwner={canMutateContent(profile.id, review)}
+              onMeasure={handleMeasureReviewItem}
               onEdit={() => onEditReview(review)}
               onDelete={() => onDeleteReview(review.id)}
               onReport={() => onReportReview(review.id)}
             />
-          ))}
-        </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -717,21 +759,60 @@ function WindowVirtualReviewList({
 function getWindowVirtualReviewRange(
   totalCount: number,
   scrollOffset: number,
-  viewportHeight: number
+  viewportHeight: number,
+  itemOffsets: number[]
 ) {
   if (totalCount <= 0) {
     return { startIndex: 0, endIndex: 0 };
   }
 
-  const firstVisibleIndex = Math.min(
-    totalCount - 1,
-    Math.max(0, Math.floor(scrollOffset / REVIEW_CARD_ESTIMATED_HEIGHT))
-  );
-  const visibleCount = Math.ceil(viewportHeight / REVIEW_CARD_ESTIMATED_HEIGHT);
+  const firstVisibleIndex = findReviewIndexAtOffset(itemOffsets, totalCount, scrollOffset);
   const startIndex = Math.max(0, firstVisibleIndex - REVIEW_LIST_OVERSCAN);
-  const endIndex = Math.min(totalCount, firstVisibleIndex + visibleCount + REVIEW_LIST_OVERSCAN);
+  const endOffset = scrollOffset + viewportHeight;
+  let visibleEndIndex = firstVisibleIndex;
+
+  while (visibleEndIndex < totalCount && itemOffsets[visibleEndIndex] < endOffset) {
+    visibleEndIndex += 1;
+  }
+
+  const endIndex = Math.min(totalCount, visibleEndIndex + REVIEW_LIST_OVERSCAN);
 
   return { startIndex, endIndex };
+}
+
+function buildReviewItemOffsets(itemSizes: number[], totalCount: number) {
+  const offsets = [0];
+
+  for (let index = 0; index < totalCount; index += 1) {
+    offsets[index + 1] = offsets[index] + (itemSizes[index] ?? REVIEW_CARD_ESTIMATED_HEIGHT);
+  }
+
+  return offsets;
+}
+
+function findReviewIndexAtOffset(itemOffsets: number[], totalCount: number, scrollOffset: number) {
+  let low = 0;
+  let high = totalCount - 1;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    const itemTop = itemOffsets[mid] ?? 0;
+    const itemBottom = itemOffsets[mid + 1] ?? itemTop + REVIEW_CARD_ESTIMATED_HEIGHT;
+
+    if (itemBottom <= scrollOffset) {
+      low = mid + 1;
+      continue;
+    }
+
+    if (itemTop > scrollOffset) {
+      high = mid - 1;
+      continue;
+    }
+
+    return mid;
+  }
+
+  return Math.min(totalCount - 1, Math.max(0, low));
 }
 
 function getViewportHeight() {
@@ -740,6 +821,54 @@ function getViewportHeight() {
   }
 
   return window.innerHeight || REVIEW_CARD_ESTIMATED_HEIGHT * 3;
+}
+
+function MeasuredReviewItem({
+  review,
+  reviewIndex,
+  totalCount,
+  isOwner,
+  onMeasure,
+  onEdit,
+  onDelete,
+  onReport,
+}: {
+  review: Review;
+  reviewIndex: number;
+  totalCount: number;
+  isOwner: boolean;
+  onMeasure: (reviewId: string, size: number) => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onReport: () => void;
+}) {
+  const itemRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      if (!node) {
+        return;
+      }
+
+      onMeasure(review.id, Math.ceil(node.getBoundingClientRect().height));
+    },
+    [onMeasure, review.id]
+  );
+
+  return (
+    <div
+      ref={itemRef}
+      style={{
+        paddingBottom: reviewIndex === totalCount - 1 ? 0 : REVIEW_CARD_GAP_HEIGHT,
+      }}
+    >
+      <ReviewItem
+        review={review}
+        isOwner={isOwner}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        onReport={onReport}
+      />
+    </div>
+  );
 }
 
 function ReviewItem({
